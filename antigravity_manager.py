@@ -48,6 +48,7 @@ from data_loader import (
     load_chat_messages,
     delete_project_cascade,
     delete_conversation,
+    move_conversation,
     ConversationInfo,
     get_paths,
     _find_brain_path,
@@ -678,11 +679,28 @@ class AntigravityManagerWindow(QMainWindow):
             act_open_brain = menu.addAction("📂 Ouvrir le dossier des journaux (brain)")
             act_open_brain.triggered.connect(lambda: self._open_conv_brain(c_info.conv_id))
 
+            # Menu Déplacer vers un projet
+            menu.addSeparator()
+            move_menu = menu.addMenu("➡️ Déplacer vers le projet…")
+            all_projs = sorted(self.project_convs.keys(), key=str.lower)
+            for p in all_projs:
+                if p != c_info.project:
+                    act_m = move_menu.addAction(f"📁  {p}")
+                    act_m.triggered.connect(lambda checked=False, target=p, info=c_info: self._move_conv_action(info, target))
+
             menu.addSeparator()
             act_del_conv = menu.addAction("🗑️ Supprimer cette conversation")
             act_del_conv.triggered.connect(lambda: self._delete_single_conv(c_info))
 
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _move_conv_action(self, c_info: ConversationInfo, target_project: str):
+        ok, msg = move_conversation(c_info.conv_id, target_project)
+        if ok:
+            QMessageBox.information(self, "Déplacement réussi", msg)
+            self.reload_data()
+        else:
+            QMessageBox.critical(self, "Erreur", f"Échec du déplacement :\n{msg}")
 
     def _open_project_folder(self, project_name: str):
         proj_dir = get_projects_root() / project_name

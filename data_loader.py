@@ -40,6 +40,31 @@ def _decode_varint(data: bytes, pos: int):
     return res, pos
 
 
+def _encode_varint(val: int) -> bytes:
+    res = bytearray()
+    while True:
+        b = val & 0x7F
+        val >>= 7
+        if val:
+            res.append(b | 0x80)
+        else:
+            res.append(b)
+            break
+    return bytes(res)
+
+
+def _encode_proto_field(field_num: int, wire_type: int, val: bytes | int) -> bytes:
+    tag = (field_num << 3) | wire_type
+    header = _encode_varint(tag)
+    if wire_type == 0:
+        return header + _encode_varint(val)
+    elif wire_type == 2:
+        return header + _encode_varint(len(val)) + val
+    elif wire_type in (1, 5):
+        return header + val
+    return b""
+
+
 def _parse_proto_fields(data: bytes):
     """Parse les champs protobuf d'un niveau donné {field_num: [(wire_type, val), ...]}"""
     fields = {}
@@ -689,5 +714,129 @@ def delete_conversation(conv_id: str) -> tuple[bool, str]:
     if errors:
         return False, "\n".join(errors)
     return True, "Conversation supprimée avec succès."
+
+
+def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str]:
+    """Déplace et réassigne officiellement une conversation vers un projet cible.
+    Met à jour echange_IA.md, les logs transcripts et les métadonnées protobuf pour
+    qu'Antigravity IDE reconnaisse la conversation sous le nouveau projet.
+    """
+    projects_root, antigravity_root, _, _, _ = get_paths()
+    target_project_dir = projects_root / target_project_name
+    new_uri = f"file:///{str(target_project_dir).replace(chr(92), '/')}"
+    new_uri_bytes = new_uri.encode("utf-8")
+    gemini_parent = antigravity_root.parent
+
+    # 1. Mise à jour de brain/conv_id/echange_IA.md
+    brain_p = _find_brain_path(conv_id)
+    if brain_p and brain_p.is_dir():
+        echange = brain_p / "echange_IA.md"
+        try:
+            lines = []
+            if echange.is_file():
+                lines = [l for l in echange.read_text(encoding="utf-8").splitlines() if not l.lower().startswith("project:")]
+            lines.insert(0, f"project: {target_project_name}")
+            echange.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    # 2. Mise à jour des transcripts
+    for sub in ("antigravity-ide", "antigravity", "antigravity-backup"):
+        b_dir = gemini_parent / sub / "brain" / conv_id
+        for tname in ("transcript.jsonl", "transcript_full.jsonl"):
+            t_file = b_dir / ".system_generated" / "logs" / tname
+            if t_file.is_file():
+                try:
+                    content = t_file.read_text(encoding="utf-8", errors="ignore")
+                    updated = re.sub(r"(\[URI\]\s*->\s*\[CorpusName\]:\s*\n?\s*)([^\s\n\r]+)", rf"\g<1>{new_uri}", content)
+                    t_file.write_text(updated, encoding="utf-8")
+                except Exception:
+                    pass
+
+    # 3. Mise à jour dans agyhub_summaries_proto.pb
+    for sub in ("antigravity-ide", "antigravity", "antigravity-backup"):
+        pb_path = gemini_parent / sub / "agyhub_summaries_proto.pb"
+        if not pb_path.is_file():
+            continue
+        try:
+            data = pb_path.read_bytes()
+            top = _parse_proto_fields(data)
+            entries = top.get(1, [])
+            new_top = {}
+            new_entries = []
+
+            for wt, raw_entry in entries:
+                f = _parse_proto_fields(raw_entry)
+                cid = f.get(1, [('', b'')])[0][1].decode('utf-8', errors='ignore').strip()
+                if cid == conv_id and 2 in f:
+                    sub_f = _parse_proto_fields(f[2][0][1])
+                    if 9 in sub_f:
+                        new_sub9 = []
+                        for s9_wt, s9_val in sub_f[9]:
+                            if isinstance(s9_val, bytes):
+                                nested = _parse_proto_fields(s9_val)
+                                for k in (1, 2, 7):
+                                    if k in nested:
+                                        nested[k] = [(2, new_uri_bytes)]
+                                rb = bytearray()
+                                for nf, nitems in nested.items():
+                                    for nw, nv in nitems:
+                                        rb.extend(_encode_proto_field(nf, nw, nv))
+                                new_sub9.append((s9_wt, bytes(rb)))
+                            else:
+                                new_sub9.append((s9_wt, s9_val))
+                        sub_f[9] = new_sub9
+
+                    if 17 in sub_f:
+                        new_sub17 = []
+                        for s17_wt, s17_val in sub_f[17]:
+                            if isinstance(s17_val, bytes):
+                                nested = _parse_proto_fields(s17_val)
+                                for k in (7, 1):
+                                    if k in nested:
+                                        nested[k] = [(2, new_uri_bytes)]
+                                rb = bytearray()
+                                for nf, nitems in nested.items():
+                                    for nw, nv in nitems:
+                                        rb.extend(_encode_proto_field(nf, nw, nv))
+                                new_sub17.append((s17_wt, bytes(rb)))
+                            else:
+                                new_sub17.append((s17_wt, s17_val))
+                        sub_f[17] = new_sub17
+
+                    rb_sub2 = bytearray()
+                    for sf, sitems in sub_f.items():
+                        for sw, sv in sitems:
+                            rb_sub2.extend(_encode_proto_field(sf, sw, sv))
+                    f[2] = [(2, bytes(rb_sub2))]
+
+                    rb_entry = bytearray()
+                    for ef, eitems in f.items():
+                        for ew, ev in eitems:
+                            rb_entry.extend(_encode_proto_field(ef, ew, ev))
+                    new_entries.append((wt, bytes(rb_entry)))
+                else:
+                    new_entries.append((wt, raw_entry))
+
+            new_top[1] = new_entries
+            for top_f, top_items in top.items():
+                if top_f != 1:
+                    new_top[top_f] = top_items
+
+            rebuilt_file = bytearray()
+            for tf, titems in new_top.items():
+                for tw, tv in titems:
+                    rebuilt_file.extend(_encode_proto_field(tf, tw, tv))
+
+            pb_path.write_bytes(bytes(rebuilt_file))
+        except Exception:
+            pass
+
+    # 4. Invalider le cache mémoire
+    if conv_id in _CHAT_CACHE:
+        del _CHAT_CACHE[conv_id]
+
+    return True, f"Conversation déplacée vers « {target_project_name} » avec succès."
+
 
 

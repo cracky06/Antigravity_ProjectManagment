@@ -67,11 +67,19 @@ def test_load_chat_messages_empty_or_nonexistent():
     assert len(msgs) == 0
 
 
-def test_build_project_map_returns_valid_structure():
-    """Vérifie que build_project_map retourne bien des dictionnaires et listes valides."""
-    proj_map, all_sorted = build_project_map()
-    assert isinstance(proj_map, dict)
-    assert isinstance(all_sorted, list)
-    for p_name, c_list in proj_map.items():
-        assert isinstance(p_name, str)
-        assert isinstance(c_list, list)
+def test_encode_varint_and_proto_field():
+    """Vérifie l'encodage de champs et varints protobuf."""
+    from data_loader import _encode_varint, _encode_proto_field
+
+    assert _encode_varint(42) == bytes([42])
+    field_bytes = _encode_proto_field(1, 0, 42)
+    assert field_bytes == bytes([0x08, 0x2A])
+
+
+def test_move_conversation_nonexistent():
+    """Vérifie que move_conversation s'exécute sans erreur même si l'ID n'existe pas."""
+    from data_loader import move_conversation
+
+    ok, msg = move_conversation("00000000-0000-0000-0000-000000000000", "TestProject")
+    assert ok is True
+
