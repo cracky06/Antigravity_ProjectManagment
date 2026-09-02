@@ -1,4 +1,6 @@
 customtkinter>=5.2.0
 PyQt6>=6.6.0
+pytest>=7.0.0
 pyinstaller>=6.0.0
+
 

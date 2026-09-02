@@ -275,7 +275,6 @@ class AntigravityManagerWindow(QMainWindow):
         self.project_convs: dict[str, list[ConversationInfo]] = {}
         self.all_convs: list[ConversationInfo] = []
         self.selected_conv: ConversationInfo | None = None
-        self.item_conv_map: dict[QTreeWidgetItem, ConversationInfo] = {}
 
         self._build_ui()
         self.reload_data()
@@ -415,7 +414,6 @@ class AntigravityManagerWindow(QMainWindow):
 
     def _populate_tree(self):
         self.tree.clear()
-        self.item_conv_map.clear()
 
         # Section 1 : Projets
         proj_header_item = QTreeWidgetItem(["PROJETS"])
@@ -445,7 +443,6 @@ class AntigravityManagerWindow(QMainWindow):
                     c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
                     c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
                     p_item.addChild(c_item)
-                    self.item_conv_map[c_item] = c_info
                 
                 # Auto-dépliage des projets contenant des conversations
                 p_item.setExpanded(True)
@@ -471,7 +468,6 @@ class AntigravityManagerWindow(QMainWindow):
             c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
             c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
             self.tree.addTopLevelItem(c_item)
-            self.item_conv_map[c_item] = c_info
 
         # Déplier les sections principales
         proj_header_item.setExpanded(True)

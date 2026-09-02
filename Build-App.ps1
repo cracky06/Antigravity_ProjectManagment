@@ -53,24 +53,26 @@ if ($CleanOnly) {
 }
 
 # 2. Verification de l'environnement Python
-Write-Host "`n[2/3] Verification de l'environnement Python..." -ForegroundColor Yellow
+Write-Host "`n[2/4] Verification de l'environnement Python..." -ForegroundColor Yellow
 
 $VenvPython = Join-Path -Path $ScriptDir -ChildPath ".venv\Scripts\python.exe"
 $VenvPyInstaller = Join-Path -Path $ScriptDir -ChildPath ".venv\Scripts\pyinstaller.exe"
+$VenvPytest = Join-Path -Path $ScriptDir -ChildPath ".venv\Scripts\pytest.exe"
 
 $PythonCmd = if (Test-Path -Path $VenvPython) { $VenvPython } else { "python" }
 $PyInstallerCmd = if (Test-Path -Path $VenvPyInstaller) { $VenvPyInstaller } else { "pyinstaller" }
+$PytestCmd = if (Test-Path -Path $VenvPytest) { $VenvPytest } else { "pytest" }
 
 Write-Host "  Interpreteur : $PythonCmd" -ForegroundColor Gray
 
 try {
-    & $PythonCmd -c "import PyQt6, PyInstaller" 2>$null
+    & $PythonCmd -c "import PyQt6, PyInstaller, pytest" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  Installation des dependances requises..." -ForegroundColor Gray
         & $PythonCmd -m pip install -r requirements.txt
     }
     else {
-        Write-Host "  Dependances detectees (PyQt6, PyInstaller)." -ForegroundColor Green
+        Write-Host "  Dependances detectees (PyQt6, PyInstaller, pytest)." -ForegroundColor Green
     }
 }
 catch {
@@ -78,8 +80,22 @@ catch {
     exit 1
 }
 
-# 3. Compilation PyInstaller
-Write-Host "`n[3/3] Compilation avec PyInstaller..." -ForegroundColor Yellow
+# 3. Execution des Tests Unitaires (Pytest)
+Write-Host "`n[3/4] Execution des tests unitaires de validation..." -ForegroundColor Yellow
+$Env:QT_QPA_PLATFORM = "offscreen"
+& $PytestCmd -q
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`n[ERREUR CRITIQUE] Un ou plusieurs tests unitaires ont echoue !" -ForegroundColor Red
+    Write-Host "Le build est annule pour empecher la creation d'un binaire defectueux." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+else {
+    Write-Host "  Tous les tests unitaires ont ete valides avec succes !" -ForegroundColor Green
+}
+
+# 4. Compilation PyInstaller
+Write-Host "`n[4/4] Compilation avec PyInstaller..." -ForegroundColor Yellow
 
 $PyInstallerArgs = @(
     "--noconfirm",

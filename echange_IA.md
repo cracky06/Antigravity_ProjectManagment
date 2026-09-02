@@ -7,8 +7,14 @@
 
 ## Environnement & Dépendances
 - Environnement virtuel local : `.venv` (Python 3.10)
-- Fichier de dépendances : `requirements.txt` (`PyQt6>=6.6.0`, `pyinstaller>=6.0.0`)
+- Fichier de dépendances : `requirements.txt` (`PyQt6>=6.6.0`, `pytest>=7.0.0`, `pyinstaller>=6.0.0`)
 - Installation : `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`
+
+## Tests Unitaires & Assurance Qualité
+- Framework : `pytest`
+- Emplacement : `tests/` (`test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`)
+- Exécution manuelle : `.\.venv\Scripts\pytest.exe -v`
+- Intégration Build : Exécution systématique à l'étape `[3/4]` de `Build-App.ps1` (annulation immédiate du build en cas d'échec).
 
 ## Compilation & Distribution
 - Script de compilation : `build.bat` ou `.\Build-App.ps1`
@@ -37,5 +43,5 @@
   - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS pour les bulles de messages et extraits de code.
   - Redimensionnement fluide via `QSplitter`.
   - Menus contextuels complets (suppression en cascade, copie ID, ouverture dossier brain/projet).
-- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la détection du `.venv` et le packaging PyInstaller.
+- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires et le packaging PyInstaller.
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.
