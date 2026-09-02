@@ -25,8 +25,11 @@
 - Automatisation des tags : `.\scripts\release.ps1 [minor|major]`
 
 ## Spécificités Techniques
-- `config.py` : gère la persistance des chemins dans `config.json` (compatible `sys.frozen` pour l'exécutable).
-- `data_loader.py` : décode le wire-format protobuf de `%USERPROFILE%\.gemini\antigravity\agyhub_summaries_proto.pb` pour obtenir les vrais titres officiels et lier chaque conversation à son workspace.
-- `antigravity_manager.py` : interface graphique CustomTkinter avec arborescence dépliable, suppression en cascade (projet + conversations), et visionneuse de chat.
-- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la détection du `.venv` et le packaging PyInstaller.
+- `config.py` : gère la persistance des chemins dans `config.json` (auto-détection dynamique `antigravity-ide` et racine projet, compatible `sys.frozen`).
+- `data_loader.py` :
+  - Découverte multi-dossiers résiliente d'`agyhub_summaries_proto.pb`.
+  - Extraction du workspace depuis les transcripts si absent du proto (`Active Document:` / URIs).
+  - Filtrage des stubs de sous-agents orphelins et fallback sur les artéfacts markdown (`walkthrough.md`, `task.md`, `implementation_plan.md`).
+- `antigravity_manager.py` : interface graphique CustomTkinter avec chevrons interactifs (`▼`/`▶`), auto-dépliage des projets actifs au lancement, suppression en cascade et visionneuse de chat instantanée.
+- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la détection du `.venv` et le packaging PyInstaller.
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.

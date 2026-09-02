@@ -104,13 +104,26 @@ def _clean_path_string(raw: str) -> str:
     return res
 
 
+def _find_summaries_pb() -> Path | None:
+    """Localise agyhub_summaries_proto.pb dans le répertoire configuré ou les dossiers .gemini frères."""
+    _, antigravity_root, _, _, summaries_pb = get_paths()
+    if summaries_pb.is_file():
+        return summaries_pb
+    gemini_parent = antigravity_root.parent
+    for sibling in ("antigravity", "antigravity-ide", "antigravity-backup"):
+        cand = gemini_parent / sibling / "agyhub_summaries_proto.pb"
+        if cand.is_file():
+            return cand
+    return None
+
+
 def _extract_proto_metadata():
     """Extrait pour chaque conversation son titre officiel et son workspace
     depuis agyhub_summaries_proto.pb.
     Retourne {conv_id: {'title': str, 'workspace': str}}
     """
-    _, _, _, _, summaries_pb = get_paths()
-    if not summaries_pb.is_file():
+    summaries_pb = _find_summaries_pb()
+    if not summaries_pb or not summaries_pb.is_file():
         return {}
 
     try:
@@ -372,6 +385,31 @@ class ConversationInfo:
         self.rel_time = relative_time(last_activity)
 
 
+def _extract_workspace_from_transcript(conv_id: str) -> str:
+    """Extrait le chemin du workspace depuis le journal de session transcript si absent du proto."""
+    transcript = _find_transcript_file(conv_id)
+    if not transcript or not transcript.is_file():
+        return ""
+    try:
+        with transcript.open(encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                m = re.search(r"Active Document:\s*([a-zA-Z]:\\[^\r\n\t]+)", line)
+                if m:
+                    doc_path = Path(m.group(1).strip())
+                    if len(doc_path.parts) >= 3:
+                        return str(doc_path.parent)
+                m2 = re.search(r"\[URI\]\s*->\s*\[CorpusName\]:\s*\n?\s*([^\s\n\r]+)", line)
+                if m2:
+                    return _clean_path_string(m2.group(1))
+                if "file:///" in line:
+                    m3 = re.search(r"file:///([^\s\n\r\>\)\"]+)", line)
+                    if m3:
+                        return _clean_path_string(m3.group(0))
+    except Exception:
+        pass
+    return ""
+
+
 # -----------------------------------------------------------------
 # Construction de la carte des projets & conversations
 # -----------------------------------------------------------------
@@ -380,7 +418,7 @@ def build_project_map():
     project_convs: {nom_projet: [ConversationInfo, ...]}
     all_sorted: [ConversationInfo, ...] triées par date décroissante
     """
-    projects_root, _, brain_dir, conversations_dir, _ = get_paths()
+    projects_root, antigravity_root, brain_dir, conversations_dir, _ = get_paths()
     proto_meta = _extract_proto_metadata()
 
     # Lister les dossiers existants dans le répertoire des projets
@@ -390,16 +428,20 @@ def build_project_map():
             if p.is_dir():
                 projects.add(p.name)
 
-    # Récupérer toutes les conversations réelles
+    # Récupérer toutes les conversations réelles (dans le dossier configuré et les dossiers frères)
     actual_convs = set()
-    if brain_dir.is_dir():
-        for d in brain_dir.iterdir():
-            if d.is_dir() and len(d.name) == 36:
-                actual_convs.add(d.name)
-    if conversations_dir.is_dir():
-        for f in conversations_dir.iterdir():
-            if f.suffix == ".db" and len(f.stem) == 36:
-                actual_convs.add(f.stem)
+    gemini_parent = antigravity_root.parent
+    for sub in ("antigravity-ide", "antigravity", "antigravity-backup"):
+        b_candidate = gemini_parent / sub / "brain"
+        if b_candidate.is_dir():
+            for d in b_candidate.iterdir():
+                if d.is_dir() and len(d.name) == 36:
+                    actual_convs.add(d.name)
+        c_candidate = gemini_parent / sub / "conversations"
+        if c_candidate.is_dir():
+            for f in c_candidate.iterdir():
+                if f.suffix == ".db" and len(f.stem) == 36:
+                    actual_convs.add(f.stem)
 
     project_convs = {p: [] for p in sorted(projects, key=str.lower)}
     all_convs = []
@@ -409,21 +451,32 @@ def build_project_map():
         title = meta.get("title", "").strip()
         workspace = meta.get("workspace", "").strip()
 
+        if not workspace:
+            workspace = _extract_workspace_from_transcript(cid)
+
         fallback_title, last_dt = get_transcript_info(cid)
         if not title:
             title = fallback_title
 
+        # Filtrage : ignorer les stubs de sous-agents orphelins sans logs ni artéfacts
+        if not title or title == cid[:12]:
+            brain_p = _find_brain_path(cid)
+            if brain_p and not (brain_p / ".system_generated" / "logs").is_dir() and not (brain_p / "task.md").is_file() and not (brain_p / "walkthrough.md").is_file():
+                continue
+
         # Vérifier override echange_IA.md si présent
-        echange = brain_dir / cid / "echange_IA.md"
+        brain_p = _find_brain_path(cid)
         override_proj = None
-        if echange.is_file():
-            try:
-                for line in echange.read_text(encoding="utf-8").splitlines():
-                    if line.lower().startswith("project:"):
-                        override_proj = line.split(":", 1)[1].strip()
-                        break
-            except Exception:
-                pass
+        if brain_p:
+            echange = brain_p / "echange_IA.md"
+            if echange.is_file():
+                try:
+                    for line in echange.read_text(encoding="utf-8").splitlines():
+                        if line.lower().startswith("project:"):
+                            override_proj = line.split(":", 1)[1].strip()
+                            break
+                except Exception:
+                    pass
 
         proj = override_proj if override_proj else workspace_to_project(workspace)
 

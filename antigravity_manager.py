@@ -445,6 +445,8 @@ class AntigravityManagerApp(ctk.CTk):
         self.update_idletasks()
 
         self.project_convs, self.all_convs = build_project_map()
+        if not self.expanded_projects:
+            self.expanded_projects = {p for p, convs in self.project_convs.items() if len(convs) > 0}
         self._render_tree()
 
         if self.selected_conv:
@@ -493,15 +495,20 @@ class AntigravityManagerApp(ctk.CTk):
             p_frame.pack(fill="x", padx=2, pady=1)
             p_frame.grid_columnconfigure(1, weight=1)
 
-            icon_txt = "📂" if is_expanded else "📁"
-            icon_lbl = ctk.CTkLabel(p_frame, text=icon_txt, font=(FONT_FAMILY, 13), width=22, text_color=FG_SECONDARY)
-            icon_lbl.grid(row=0, column=0, padx=(6, 2), pady=2)
+            if count > 0:
+                chevron = "▼ " if is_expanded else "▶ "
+                icon_txt = chevron + ("📂" if is_expanded else "📁")
+            else:
+                icon_txt = "   📁"
+
+            icon_lbl = ctk.CTkLabel(p_frame, text=icon_txt, font=(FONT_FAMILY, 11), width=32, text_color=FG_SECONDARY)
+            icon_lbl.grid(row=0, column=0, padx=(4, 2), pady=2)
 
             name_lbl = ctk.CTkLabel(p_frame, text=proj_name, font=(FONT_FAMILY, 11), anchor="w", text_color=FG_PRIMARY)
             name_lbl.grid(row=0, column=1, padx=2, pady=2, sticky="w")
 
             if count > 0:
-                cnt_lbl = ctk.CTkLabel(p_frame, text=str(count), font=(FONT_FAMILY, 10), text_color=FG_MUTED, anchor="e")
+                cnt_lbl = ctk.CTkLabel(p_frame, text=str(count), font=(FONT_FAMILY, 10, "bold"), text_color=FG_MUTED, anchor="e")
                 cnt_lbl.grid(row=0, column=2, padx=(0, 8), pady=2, sticky="e")
 
             # Actions Clic
