@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """antigravity_manager.py — Application graphique Antigravity Project & Chat Manager.
 
-Fonctionnalités complètes :
-- Arborescence projets avec icônes dépliables (pas d'espace vide si dossier vide)
-- Vrais titres officiels des conversations et timestamps relatifs
-- Dialogue Paramètres pour configurer les répertoires Projets et Antigravity
-- Suppression en cascade : supprimer un projet supprime aussi toutes ses conversations associées
-- Volet droit avec visionneuse complète de chat (requêtes utilisateur et réponses IA)
-- Menus contextuels (renommer, supprimer, déplacer, copier l'ID)
+Version optimisée & fluide :
+- Redimensionnement interactif complet (séparateur glissant entre sidebar et chat)
+- Rendu instantané du chat (début tout en haut, zéro latence)
+- Bouton « ⚙️ Paramètres » très visible avec affichage en clair du dossier projet actif
+- Dialogue de configuration des dossiers avec explorateur
+- Arborescence projets & conversations avec vrais titres officiels et timestamps relatifs
+- Suppression en cascade (projet + conversations)
 """
 
+import os
 import shutil
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog
 import customtkinter as ctk
 
 from config import load_config, save_config, get_projects_root, get_antigravity_root
@@ -25,28 +26,26 @@ from data_loader import (
 )
 
 # -----------------------------------------------------------------
-# Configuration de l'apparence
+# Thème & Couleurs (Fidèle à Antigravity)
 # -----------------------------------------------------------------
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
-BG_SIDEBAR = "#F7F7F8"
+BG_SIDEBAR = "#F8F9FA"
 BG_MAIN = "#FFFFFF"
-BG_HOVER = "#ECECF1"
-BG_SELECTED = "#E3E3E8"
-BG_USER_BUBBLE = "#F0F4F9"
-BORDER_USER_BUBBLE = "#D3E3FD"
-BG_MODEL_CARD = "#FFFFFF"
-BORDER_MODEL_CARD = "#E5E5E5"
+BG_HOVER = "#EDEDF0"
+BG_SELECTED = "#E2E7F0"
+BG_CODE = "#F1F3F5"
 
-FG_TEXT_PRIMARY = "#1F1F1F"
-FG_TEXT_SECONDARY = "#6E6E80"
-FG_TEXT_MUTED = "#8E8EA0"
-FG_SECTION_TITLE = "#444746"
-SEPARATOR_COLOR = "#E5E5E5"
-ACCENT_COLOR = "#0B57D0"
+FG_PRIMARY = "#1F1F1F"
+FG_SECONDARY = "#5F6368"
+FG_MUTED = "#80868B"
+FG_USER = "#0B57D0"
+FG_AI = "#1E1E1E"
 
+SEPARATOR_COLOR = "#E0E0E0"
 FONT_FAMILY = "Segoe UI"
+FONT_MONO = "Consolas"
 
 
 # =================================================================
@@ -55,10 +54,9 @@ FONT_FAMILY = "Segoe UI"
 class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, parent, on_save_callback):
         super().__init__(parent)
-        self.title("Paramètres — Antigravity Manager")
-        self.geometry("620x320")
-        self.minsize(540, 280)
-        self.resizable(False, False)
+        self.title("Paramètres des Emplacements — Antigravity Manager")
+        self.geometry("680x360")
+        self.minsize(580, 320)
         self.transient(parent)
         self.grab_set()
 
@@ -70,73 +68,73 @@ class SettingsDialog(ctk.CTkToplevel):
     def _build_ui(self):
         self.grid_columnconfigure(1, weight=1)
 
-        title_lbl = ctk.CTkLabel(
+        # Titre
+        ctk.CTkLabel(
             self,
-            text="Configuration des Emplacements",
-            font=(FONT_FAMILY, 15, "bold"),
-            text_color=FG_TEXT_PRIMARY,
-        )
-        title_lbl.grid(row=0, column=0, columnspan=3, padx=20, pady=(18, 12), sticky="w")
+            text="⚙️ Configuration des Dossiers",
+            font=(FONT_FAMILY, 16, "bold"),
+            text_color=FG_PRIMARY,
+        ).grid(row=0, column=0, columnspan=3, padx=20, pady=(20, 10), sticky="w")
 
-        # 1. Répertoire des Projets
+        # 1. Dossier Projets
         ctk.CTkLabel(
             self,
             text="Dossier Projets :",
             font=(FONT_FAMILY, 12, "bold"),
-            text_color=FG_TEXT_PRIMARY,
-        ).grid(row=1, column=0, padx=(20, 10), pady=10, sticky="w")
+            text_color=FG_PRIMARY,
+        ).grid(row=1, column=0, padx=(20, 10), pady=12, sticky="w")
 
-        self.proj_entry = ctk.CTkEntry(self, font=(FONT_FAMILY, 11), height=32)
-        self.proj_entry.grid(row=1, column=1, padx=(0, 10), pady=10, sticky="ew")
+        self.proj_entry = ctk.CTkEntry(self, font=(FONT_FAMILY, 11), height=34)
+        self.proj_entry.grid(row=1, column=1, padx=(0, 10), pady=12, sticky="ew")
         self.proj_entry.insert(0, self.config_data.get("projects_root", r"D:\DEV"))
 
         btn_browse_proj = ctk.CTkButton(
             self,
-            text="Parcourir...",
-            width=90,
-            height=32,
+            text="📁 Parcourir...",
+            width=110,
+            height=34,
             font=(FONT_FAMILY, 11),
             command=self._browse_projects,
         )
-        btn_browse_proj.grid(row=1, column=2, padx=(0, 20), pady=10)
+        btn_browse_proj.grid(row=1, column=2, padx=(0, 20), pady=12)
 
-        # 2. Répertoire Antigravity Data
+        # 2. Dossier Antigravity Data
         ctk.CTkLabel(
             self,
-            text="Dossier Antigravity :",
+            text="Données Antigravity :",
             font=(FONT_FAMILY, 12, "bold"),
-            text_color=FG_TEXT_PRIMARY,
-        ).grid(row=2, column=0, padx=(20, 10), pady=10, sticky="w")
+            text_color=FG_PRIMARY,
+        ).grid(row=2, column=0, padx=(20, 10), pady=12, sticky="w")
 
-        self.ag_entry = ctk.CTkEntry(self, font=(FONT_FAMILY, 11), height=32)
-        self.ag_entry.grid(row=2, column=1, padx=(0, 10), pady=10, sticky="ew")
+        self.ag_entry = ctk.CTkEntry(self, font=(FONT_FAMILY, 11), height=34)
+        self.ag_entry.grid(row=2, column=1, padx=(0, 10), pady=12, sticky="ew")
         self.ag_entry.insert(0, self.config_data.get("antigravity_root", ""))
 
         btn_browse_ag = ctk.CTkButton(
             self,
-            text="Parcourir...",
-            width=90,
-            height=32,
+            text="📁 Parcourir...",
+            width=110,
+            height=34,
             font=(FONT_FAMILY, 11),
             command=self._browse_antigravity,
         )
-        btn_browse_ag.grid(row=2, column=2, padx=(0, 20), pady=10)
+        btn_browse_ag.grid(row=2, column=2, padx=(0, 20), pady=12)
 
-        # Description explicative
-        desc_lbl = ctk.CTkLabel(
+        # Explications
+        ctk.CTkLabel(
             self,
-            text="Antigravity stocke ses données dans %USERPROFILE%\\.gemini\\antigravity\nLe dossier projets correspond à la racine où sont créés vos répertoires de développement.",
+            text="• Dossier Projets : répertoire racine où sont stockés vos projets de développement (ex: D:\\DEV)\n"
+                 "• Données Antigravity : emplacement où Antigravity enregistre l'historique (%USERPROFILE%\\.gemini\\antigravity)",
             font=(FONT_FAMILY, 10),
-            text_color=FG_TEXT_MUTED,
+            text_color=FG_MUTED,
             justify="left",
-        )
-        desc_lbl.grid(row=3, column=0, columnspan=3, padx=20, pady=(6, 16), sticky="w")
+        ).grid(row=3, column=0, columnspan=3, padx=20, pady=(6, 16), sticky="w")
 
-        # Boutons d'action
+        # Boutons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.grid(row=4, column=0, columnspan=3, padx=20, pady=(0, 16), sticky="e")
+        btn_frame.grid(row=4, column=0, columnspan=3, padx=20, pady=(10, 16), sticky="e")
 
-        btn_cancel = ctk.CTkButton(
+        ctk.CTkButton(
             btn_frame,
             text="Annuler",
             width=90,
@@ -144,31 +142,29 @@ class SettingsDialog(ctk.CTkToplevel):
             font=(FONT_FAMILY, 11),
             fg_color=BG_HOVER,
             hover_color=BG_SELECTED,
-            text_color=FG_TEXT_PRIMARY,
+            text_color=FG_PRIMARY,
             command=self.destroy,
-        )
-        btn_cancel.pack(side="left", padx=(0, 10))
+        ).pack(side="left", padx=(0, 10))
 
-        btn_save = ctk.CTkButton(
+        ctk.CTkButton(
             btn_frame,
             text="Enregistrer",
-            width=100,
+            width=110,
             height=32,
             font=(FONT_FAMILY, 11, "bold"),
             command=self._save,
-        )
-        btn_save.pack(side="left")
+        ).pack(side="left")
 
     def _browse_projects(self):
         cur = self.proj_entry.get().strip()
-        d = filedialog.askdirectory(initialdir=cur, title="Sélectionnez le répertoire racine des Projets")
+        d = filedialog.askdirectory(initialdir=cur, title="Sélectionner le dossier racine des Projets")
         if d:
             self.proj_entry.delete(0, "end")
             self.proj_entry.insert(0, d.replace("/", "\\"))
 
     def _browse_antigravity(self):
         cur = self.ag_entry.get().strip()
-        d = filedialog.askdirectory(initialdir=cur, title="Sélectionnez le répertoire des données Antigravity")
+        d = filedialog.askdirectory(initialdir=cur, title="Sélectionner le dossier des données Antigravity")
         if d:
             self.ag_entry.delete(0, "end")
             self.ag_entry.insert(0, d.replace("/", "\\"))
@@ -178,7 +174,7 @@ class SettingsDialog(ctk.CTkToplevel):
         new_ag = self.ag_entry.get().strip()
 
         if not new_proj:
-            messagebox.showerror("Erreur", "Le chemin du dossier projets ne peut pas être vide.")
+            messagebox.showerror("Erreur", "Le dossier projets est obligatoire.")
             return
 
         self.config_data["projects_root"] = new_proj
@@ -192,150 +188,6 @@ class SettingsDialog(ctk.CTkToplevel):
 
 
 # =================================================================
-# Widget : Ligne de Projet dans la sidebar
-# =================================================================
-class ProjectItem(ctk.CTkFrame):
-    """Ligne représentant un projet dans la liste latérale."""
-
-    def __init__(self, master, project_name: str, convs: list[ConversationInfo],
-                 on_toggle_callback, on_right_click_callback):
-        super().__init__(master, fg_color="transparent", corner_radius=6, height=34)
-        self.project_name = project_name
-        self.convs = convs
-        self.conv_count = len(convs)
-        self.expanded = False
-        self._on_toggle = on_toggle_callback
-        self._on_right_click = on_right_click_callback
-
-        self.grid_columnconfigure(1, weight=1)
-
-        self.icon_label = ctk.CTkLabel(
-            self,
-            text="📁",
-            font=(FONT_FAMILY, 14),
-            width=24,
-            fg_color="transparent",
-            text_color=FG_TEXT_SECONDARY,
-        )
-        self.icon_label.grid(row=0, column=0, padx=(8, 4), pady=4)
-
-        self.name_label = ctk.CTkLabel(
-            self,
-            text=project_name,
-            font=(FONT_FAMILY, 12, "normal"),
-            anchor="w",
-            fg_color="transparent",
-            text_color=FG_TEXT_PRIMARY,
-        )
-        self.name_label.grid(row=0, column=1, padx=(2, 4), pady=4, sticky="w")
-
-        if self.conv_count > 0:
-            self.count_label = ctk.CTkLabel(
-                self,
-                text=str(self.conv_count),
-                font=(FONT_FAMILY, 10),
-                anchor="e",
-                fg_color="transparent",
-                text_color=FG_TEXT_MUTED,
-            )
-            self.count_label.grid(row=0, column=2, padx=(0, 10), pady=4, sticky="e")
-
-        for w in (self, self.icon_label, self.name_label):
-            w.bind("<Button-1>", self._on_click)
-            w.bind("<Button-3>", self._on_right_click_event)
-            w.bind("<Enter>", self._on_enter)
-            w.bind("<Leave>", self._on_leave)
-
-    def _on_click(self, event=None):
-        if self.conv_count == 0:
-            return
-        self.expanded = not self.expanded
-        self.icon_label.configure(text="📂" if self.expanded else "📁")
-        self._on_toggle(self.project_name, self.expanded)
-
-    def _on_right_click_event(self, event):
-        self._on_right_click(event, self.project_name, self.convs)
-
-    def _on_enter(self, event=None):
-        self.configure(fg_color=BG_HOVER)
-
-    def _on_leave(self, event=None):
-        self.configure(fg_color="transparent")
-
-
-# =================================================================
-# Widget : Ligne de Conversation dans la sidebar
-# =================================================================
-class ConversationItem(ctk.CTkFrame):
-    """Ligne représentant une conversation cliquable."""
-
-    def __init__(self, master, info: ConversationInfo, indent: bool = False,
-                 on_select_callback = None, on_right_click_callback = None,
-                 is_selected: bool = False):
-        super().__init__(
-            master,
-            fg_color=BG_SELECTED if is_selected else "transparent",
-            corner_radius=6,
-            height=30,
-        )
-        self.info = info
-        self._on_select = on_select_callback
-        self._on_right_click = on_right_click_callback
-        self.is_selected = is_selected
-
-        self.grid_columnconfigure(0, weight=1)
-
-        pad_left = 32 if indent else 10
-
-        display_title = info.title if info.title else info.conv_id[:12]
-        if len(display_title) > 36:
-            display_title = display_title[:34] + "…"
-
-        self.title_label = ctk.CTkLabel(
-            self,
-            text=display_title,
-            font=(FONT_FAMILY, 12),
-            anchor="w",
-            fg_color="transparent",
-            text_color=FG_TEXT_PRIMARY if not is_selected else ACCENT_COLOR,
-        )
-        self.title_label.grid(row=0, column=0, padx=(pad_left, 4), pady=3, sticky="w")
-
-        if info.rel_time:
-            self.time_label = ctk.CTkLabel(
-                self,
-                text=info.rel_time,
-                font=(FONT_FAMILY, 11),
-                anchor="e",
-                fg_color="transparent",
-                text_color=FG_TEXT_MUTED,
-            )
-            self.time_label.grid(row=0, column=1, padx=(2, 10), pady=3, sticky="e")
-
-        for w in (self, self.title_label):
-            w.bind("<Button-1>", self._on_click)
-            w.bind("<Button-3>", self._on_right_click_event)
-            w.bind("<Enter>", self._on_enter)
-            w.bind("<Leave>", self._on_leave)
-
-    def _on_click(self, event=None):
-        if self._on_select:
-            self._on_select(self.info)
-
-    def _on_right_click_event(self, event):
-        if self._on_right_click:
-            self._on_right_click(event, self.info)
-
-    def _on_enter(self, event=None):
-        if not self.is_selected:
-            self.configure(fg_color=BG_HOVER)
-
-    def _on_leave(self, event=None):
-        if not self.is_selected:
-            self.configure(fg_color="transparent")
-
-
-# =================================================================
 # Application Principale Antigravity Manager
 # =================================================================
 class AntigravityManagerApp(ctk.CTk):
@@ -343,10 +195,11 @@ class AntigravityManagerApp(ctk.CTk):
         super().__init__()
 
         self.title("Antigravity Manager — Project & Chat Management")
-        self.geometry("1200x820")
-        self.minsize(960, 600)
+        self.geometry("1240x840")
+        self.minsize(800, 500)
         self.configure(fg_color=BG_MAIN)
 
+        # État
         self.project_convs: dict[str, list[ConversationInfo]] = {}
         self.all_convs: list[ConversationInfo] = []
         self.expanded_projects: set[str] = set()
@@ -356,67 +209,94 @@ class AntigravityManagerApp(ctk.CTk):
         self.reload_data()
 
     # -------------------------------------------------------------
-    # Construction UI
+    # Construction de l'interface avec PanedWindow (redimensionnable)
     # -------------------------------------------------------------
     def _build_ui(self):
+        # Grille principale : Ligne 0 = PanedWindow (Sidebar + Chat), Ligne 1 = Status bar
         self.grid_rowconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=0)
-        self.grid_columnconfigure(0, weight=0, minsize=330)
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
 
-        # 1. SIDEBAR
+        # ---------------------------------------------------------
+        # PanedWindow horizontal : Séparateur déplaçable à la souris
+        # ---------------------------------------------------------
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TPanedwindow", background=SEPARATOR_COLOR)
+        style.configure("Sash", sashthickness=5, gripcount=0, background=SEPARATOR_COLOR)
+
+        self.paned = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
+        self.paned.grid(row=0, column=0, sticky="nsew")
+
+        # =========================================================
+        # 1. VOLET GAUCHE : SIDEBAR
+        # =========================================================
         self.sidebar_frame = ctk.CTkFrame(
-            self,
+            self.paned,
             fg_color=BG_SIDEBAR,
             corner_radius=0,
             border_width=0,
-            width=330,
+            width=340,
         )
-        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(1, weight=1)
+        self.paned.add(self.sidebar_frame, weight=0)
+        self.sidebar_frame.grid_rowconfigure(2, weight=1)
         self.sidebar_frame.grid_columnconfigure(0, weight=1)
 
-        # En-tête Sidebar
-        sb_top = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent", height=42)
-        sb_top.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
-        sb_top.grid_columnconfigure(0, weight=1)
+        # En-tête Sidebar : Titre + Boutons
+        sb_header = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        sb_header.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
+        sb_header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            sb_top,
+            sb_header,
             text="Antigravity",
             font=(FONT_FAMILY, 15, "bold"),
-            text_color=FG_TEXT_PRIMARY,
+            text_color=FG_PRIMARY,
             anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=4)
+        ).grid(row=0, column=0, sticky="w")
 
-        actions_box = ctk.CTkFrame(sb_top, fg_color="transparent")
-        actions_box.grid(row=0, column=1, sticky="e")
+        btn_box = ctk.CTkFrame(sb_header, fg_color="transparent")
+        btn_box.grid(row=0, column=1, sticky="e")
 
-        settings_btn = ctk.CTkButton(
-            actions_box,
-            text="⚙️",
-            width=32,
+        self.btn_settings = ctk.CTkButton(
+            btn_box,
+            text="⚙️ Paramètres",
+            width=100,
             height=28,
-            fg_color="transparent",
-            hover_color=BG_HOVER,
-            text_color=FG_TEXT_SECONDARY,
-            font=(FONT_FAMILY, 13),
+            font=(FONT_FAMILY, 11, "bold"),
+            fg_color="#E8EEF9",
+            hover_color=BG_SELECTED,
+            text_color=FG_USER,
             command=self._open_settings,
         )
-        settings_btn.pack(side="left", padx=2)
+        self.btn_settings.pack(side="left", padx=(0, 4))
 
-        refresh_btn = ctk.CTkButton(
-            actions_box,
+        self.btn_refresh = ctk.CTkButton(
+            btn_box,
             text="🔄",
             width=32,
             height=28,
+            font=(FONT_FAMILY, 12),
             fg_color="transparent",
             hover_color=BG_HOVER,
-            text_color=FG_TEXT_SECONDARY,
-            font=(FONT_FAMILY, 13),
+            text_color=FG_SECONDARY,
             command=self.reload_data,
         )
-        refresh_btn.pack(side="left", padx=2)
+        self.btn_refresh.pack(side="left")
+
+        # Bandeau affichant le chemin du dossier projet actif
+        self.path_badge = ctk.CTkFrame(self.sidebar_frame, fg_color="#EBECEF", corner_radius=4, height=24)
+        self.path_badge.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+        self.path_badge.grid_columnconfigure(0, weight=1)
+
+        self.path_badge_label = ctk.CTkLabel(
+            self.path_badge,
+            text="Dossier : D:\\DEV",
+            font=(FONT_FAMILY, 9),
+            text_color=FG_SECONDARY,
+            anchor="w",
+        )
+        self.path_badge_label.grid(row=0, column=0, padx=8, pady=2, sticky="w")
 
         # Arborescence scrollable
         self.tree_scroll = ctk.CTkScrollableFrame(
@@ -425,27 +305,24 @@ class AntigravityManagerApp(ctk.CTk):
             corner_radius=0,
             scrollbar_button_color=SEPARATOR_COLOR,
         )
-        self.tree_scroll.grid(row=1, column=0, sticky="nsew", padx=2, pady=0)
+        self.tree_scroll.grid(row=2, column=0, sticky="nsew", padx=2, pady=0)
         self.tree_scroll.grid_columnconfigure(0, weight=1)
 
-        # 2. CHAT VIEWER
-        self.chat_viewer_frame = ctk.CTkFrame(
-            self,
+        # =========================================================
+        # 2. VOLET DROIT : CHAT VIEWER
+        # =========================================================
+        self.chat_container = ctk.CTkFrame(
+            self.paned,
             fg_color=BG_MAIN,
             corner_radius=0,
         )
-        self.chat_viewer_frame.grid(row=0, column=1, sticky="nsew")
-        self.chat_viewer_frame.grid_rowconfigure(2, weight=1)
-        self.chat_viewer_frame.grid_columnconfigure(0, weight=1)
+        self.paned.add(self.chat_container, weight=1)
+        self.chat_container.grid_rowconfigure(2, weight=1)
+        self.chat_container.grid_columnconfigure(0, weight=1)
 
-        # En-tête Chat
-        self.chat_header = ctk.CTkFrame(
-            self.chat_viewer_frame,
-            fg_color=BG_MAIN,
-            corner_radius=0,
-            height=60,
-        )
-        self.chat_header.grid(row=0, column=0, sticky="ew", padx=16, pady=8)
+        # En-tête du Chat
+        self.chat_header = ctk.CTkFrame(self.chat_container, fg_color=BG_MAIN, height=56)
+        self.chat_header.grid(row=0, column=0, sticky="ew", padx=18, pady=(8, 4))
         self.chat_header.grid_columnconfigure(0, weight=1)
 
         self.chat_title_label = ctk.CTkLabel(
@@ -453,37 +330,38 @@ class AntigravityManagerApp(ctk.CTk):
             text="Sélectionnez une conversation",
             font=(FONT_FAMILY, 15, "bold"),
             anchor="w",
-            text_color=FG_TEXT_PRIMARY,
+            text_color=FG_PRIMARY,
         )
         self.chat_title_label.grid(row=0, column=0, sticky="w")
 
         self.chat_meta_label = ctk.CTkLabel(
             self.chat_header,
-            text="",
+            text="Cliquez sur une conversation à gauche pour afficher les échanges.",
             font=(FONT_FAMILY, 11),
             anchor="w",
-            text_color=FG_TEXT_SECONDARY,
+            text_color=FG_SECONDARY,
         )
         self.chat_meta_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
-        self.chat_actions_frame = ctk.CTkFrame(self.chat_header, fg_color="transparent")
-        self.chat_actions_frame.grid(row=0, column=1, rowspan=2, sticky="e", padx=(10, 0))
+        # Actions d'en-tête
+        self.chat_actions = ctk.CTkFrame(self.chat_header, fg_color="transparent")
+        self.chat_actions.grid(row=0, column=1, rowspan=2, sticky="e")
 
         self.btn_copy_id = ctk.CTkButton(
-            self.chat_actions_frame,
+            self.chat_actions,
             text="📋 Copier ID",
             width=80,
             height=28,
             font=(FONT_FAMILY, 11),
             fg_color=BG_HOVER,
             hover_color=BG_SELECTED,
-            text_color=FG_TEXT_PRIMARY,
+            text_color=FG_PRIMARY,
             command=self._copy_current_conv_id,
         )
         self.btn_copy_id.pack(side="left", padx=4)
 
         self.btn_delete_chat = ctk.CTkButton(
-            self.chat_actions_frame,
+            self.chat_actions,
             text="🗑️ Supprimer",
             width=85,
             height=28,
@@ -495,36 +373,65 @@ class AntigravityManagerApp(ctk.CTk):
         )
         self.btn_delete_chat.pack(side="left", padx=4)
 
-        # Ligne de séparation
+        # Séparateur sous l'en-tête
         ctk.CTkFrame(
-            self.chat_viewer_frame,
+            self.chat_container,
             fg_color=SEPARATOR_COLOR,
             height=1,
             corner_radius=0,
-        ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 2))
 
-        # Messages scrollables
-        self.chat_messages_scroll = ctk.CTkScrollableFrame(
-            self.chat_viewer_frame,
-            fg_color=BG_MAIN,
-            corner_radius=0,
-            scrollbar_button_color=SEPARATOR_COLOR,
+        # Zone d'affichage du Chat ultra-rapide
+        chat_text_frame = tk.Frame(self.chat_container, bg=BG_MAIN)
+        chat_text_frame.grid(row=2, column=0, sticky="nsew", padx=16, pady=(4, 8))
+        chat_text_frame.grid_rowconfigure(0, weight=1)
+        chat_text_frame.grid_columnconfigure(0, weight=1)
+
+        chat_scroll = ttk.Scrollbar(chat_text_frame, orient=tk.VERTICAL)
+        chat_scroll.grid(row=0, column=1, sticky="ns")
+
+        self.chat_text = tk.Text(
+            chat_text_frame,
+            wrap=tk.WORD,
+            bg=BG_MAIN,
+            fg=FG_PRIMARY,
+            font=(FONT_FAMILY, 11),
+            relief=tk.FLAT,
+            padx=16,
+            pady=16,
+            yscrollcommand=chat_scroll.set,
+            cursor="arrow",
         )
-        self.chat_messages_scroll.grid(row=2, column=0, sticky="nsew", padx=16, pady=8)
-        self.chat_messages_scroll.grid_columnconfigure(0, weight=1)
+        self.chat_text.grid(row=0, column=0, sticky="nsew")
+        chat_scroll.config(command=self.chat_text.yview)
 
-        # 3. STATUS BAR
+        # Configuration des styles / tags dans le Text widget
+        self.chat_text.tag_config("user_box", background="#F0F4F9", lmargin1=10, lmargin2=10, rmargin=10, spacing1=4, spacing3=4)
+        self.chat_text.tag_config("user_title", font=(FONT_FAMILY, 11, "bold"), foreground=FG_USER)
+        self.chat_text.tag_config("user_text", font=(FONT_FAMILY, 11), foreground=FG_PRIMARY)
+        self.chat_text.tag_config("model_title", font=(FONT_FAMILY, 11, "bold"), foreground=FG_AI)
+        self.chat_text.tag_config("model_text", font=(FONT_FAMILY, 11), foreground=FG_PRIMARY)
+        self.chat_text.tag_config("time_tag", font=(FONT_FAMILY, 9), foreground=FG_MUTED)
+        self.chat_text.tag_config("sep_tag", font=(FONT_FAMILY, 4), foreground=SEPARATOR_COLOR)
+        self.chat_text.tag_config("empty_tag", font=(FONT_FAMILY, 12, "italic"), foreground=FG_MUTED, justify="center")
+
+        # =========================================================
+        # 3. STATUS BAR (Bas)
+        # =========================================================
         self.status_bar = ctk.CTkLabel(
             self,
             text="Prêt",
             font=(FONT_FAMILY, 10),
             anchor="w",
-            fg_color="#EFEFEF",
-            text_color=FG_TEXT_MUTED,
+            fg_color="#EBECEF",
+            text_color=FG_MUTED,
             height=22,
         )
-        self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
+        self.status_bar.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
 
+    # -------------------------------------------------------------
+    # Paramètres
+    # -------------------------------------------------------------
     def _open_settings(self):
         SettingsDialog(self, on_save_callback=self.reload_data)
 
@@ -532,7 +439,9 @@ class AntigravityManagerApp(ctk.CTk):
     # Chargement des données
     # -------------------------------------------------------------
     def reload_data(self):
-        self.status_bar.configure(text="Chargement des données...")
+        projects_root, _, _, _, _ = get_paths()
+        self.path_badge_label.configure(text=f"Dossier : {projects_root}")
+        self.status_bar.configure(text="Chargement des données Antigravity...")
         self.update_idletasks()
 
         self.project_convs, self.all_convs = build_project_map()
@@ -550,96 +459,146 @@ class AntigravityManagerApp(ctk.CTk):
         else:
             self._clear_chat_viewer()
 
-        projects_root, _, _, _, _ = get_paths()
         total_p = len(self.project_convs)
         total_c = len(self.all_convs)
-        self.status_bar.configure(text=f"Projets : {projects_root} | {total_p} projets — {total_c} conversations")
+        self.status_bar.configure(text=f"Racine : {projects_root} | {total_p} projets — {total_c} conversations")
 
+    # -------------------------------------------------------------
+    # Arborescence latérale (Optimisée)
+    # -------------------------------------------------------------
     def _render_tree(self):
         for w in self.tree_scroll.winfo_children():
             w.destroy()
 
-        # Section Projects
-        proj_sec_frame = ctk.CTkFrame(self.tree_scroll, fg_color="transparent")
-        proj_sec_frame.pack(fill="x", padx=4, pady=(4, 4))
-        proj_sec_frame.grid_columnconfigure(0, weight=1)
+        # Section 1 : Projects
+        proj_sec = ctk.CTkFrame(self.tree_scroll, fg_color="transparent")
+        proj_sec.pack(fill="x", padx=4, pady=(2, 2))
+        proj_sec.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            proj_sec_frame,
+            proj_sec,
             text="Projects",
             font=(FONT_FAMILY, 12, "bold"),
-            text_color=FG_SECTION_TITLE,
+            text_color=FG_SECONDARY,
             anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=6)
 
         for proj_name in sorted(self.project_convs.keys(), key=str.lower):
             convs = self.project_convs[proj_name]
-            p_item = ProjectItem(
-                self.tree_scroll,
-                project_name=proj_name,
-                convs=convs,
-                on_toggle_callback=self._on_project_toggle,
-                on_right_click_callback=self._on_project_context_menu,
-            )
-            p_item.pack(fill="x", padx=2, pady=1)
+            count = len(convs)
+            is_expanded = proj_name in self.expanded_projects and count > 0
 
-            if proj_name in self.expanded_projects and convs:
-                p_item.expanded = True
-                p_item.icon_label.configure(text="📂")
+            # Ligne de projet
+            p_frame = ctk.CTkFrame(self.tree_scroll, fg_color="transparent", corner_radius=5, height=30)
+            p_frame.pack(fill="x", padx=2, pady=1)
+            p_frame.grid_columnconfigure(1, weight=1)
 
-                conv_container = ctk.CTkFrame(self.tree_scroll, fg_color="transparent")
-                conv_container.pack(fill="x", padx=0, pady=0)
+            icon_txt = "📂" if is_expanded else "📁"
+            icon_lbl = ctk.CTkLabel(p_frame, text=icon_txt, font=(FONT_FAMILY, 13), width=22, text_color=FG_SECONDARY)
+            icon_lbl.grid(row=0, column=0, padx=(6, 2), pady=2)
 
+            name_lbl = ctk.CTkLabel(p_frame, text=proj_name, font=(FONT_FAMILY, 11), anchor="w", text_color=FG_PRIMARY)
+            name_lbl.grid(row=0, column=1, padx=2, pady=2, sticky="w")
+
+            if count > 0:
+                cnt_lbl = ctk.CTkLabel(p_frame, text=str(count), font=(FONT_FAMILY, 10), text_color=FG_MUTED, anchor="e")
+                cnt_lbl.grid(row=0, column=2, padx=(0, 8), pady=2, sticky="e")
+
+            # Actions Clic
+            def make_toggle(pname=proj_name, c_cnt=count):
+                return lambda e: self._toggle_project_click(pname, c_cnt)
+
+            def make_rclick_proj(pname=proj_name, pconvs=convs):
+                return lambda e: self._on_project_context_menu(e, pname, pconvs)
+
+            for w in (p_frame, icon_lbl, name_lbl):
+                w.bind("<Button-1>", make_toggle())
+                w.bind("<Button-3>", make_rclick_proj())
+                w.bind("<Enter>", lambda e, f=p_frame: f.configure(fg_color=BG_HOVER))
+                w.bind("<Leave>", lambda e, f=p_frame: f.configure(fg_color="transparent"))
+
+            # Conversations imbriquées si déplié (et seulement si non vide)
+            if is_expanded:
                 for c_info in convs:
-                    is_sel = bool(self.selected_conv and self.selected_conv.conv_id == c_info.conv_id)
-                    c_item = ConversationItem(
-                        conv_container,
-                        info=c_info,
-                        indent=True,
-                        on_select_callback=self.display_chat,
-                        on_right_click_callback=self._on_conv_context_menu,
-                        is_selected=is_sel,
-                    )
-                    c_item.pack(fill="x", padx=2, pady=1)
+                    self._create_conv_widget(c_info, indent=True)
 
         # Séparateur
         sep = ctk.CTkFrame(self.tree_scroll, fg_color=SEPARATOR_COLOR, height=1, corner_radius=0)
-        sep.pack(fill="x", padx=8, pady=(14, 8))
+        sep.pack(fill="x", padx=8, pady=(12, 6))
 
-        # Section Conversations Récentes
-        conv_sec_frame = ctk.CTkFrame(self.tree_scroll, fg_color="transparent")
-        conv_sec_frame.pack(fill="x", padx=4, pady=(2, 4))
-        conv_sec_frame.grid_columnconfigure(0, weight=1)
+        # Section 2 : Conversations Récentes
+        conv_sec = ctk.CTkFrame(self.tree_scroll, fg_color="transparent")
+        conv_sec.pack(fill="x", padx=4, pady=(2, 2))
+        conv_sec.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            conv_sec_frame,
+            conv_sec,
             text="Conversations ▾",
             font=(FONT_FAMILY, 12, "bold"),
-            text_color=FG_SECTION_TITLE,
+            text_color=FG_SECONDARY,
             anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=6)
 
         for c_info in self.all_convs[:40]:
-            is_sel = bool(self.selected_conv and self.selected_conv.conv_id == c_info.conv_id)
-            c_item = ConversationItem(
-                self.tree_scroll,
-                info=c_info,
-                indent=False,
-                on_select_callback=self.display_chat,
-                on_right_click_callback=self._on_conv_context_menu,
-                is_selected=is_sel,
-            )
-            c_item.pack(fill="x", padx=2, pady=1)
+            self._create_conv_widget(c_info, indent=False)
 
-    def _on_project_toggle(self, project_name: str, expanded: bool):
-        if expanded:
-            self.expanded_projects.add(project_name)
+    def _create_conv_widget(self, c_info: ConversationInfo, indent: bool):
+        is_sel = bool(self.selected_conv and self.selected_conv.conv_id == c_info.conv_id)
+        bg = BG_SELECTED if is_sel else "transparent"
+
+        c_frame = ctk.CTkFrame(self.tree_scroll, fg_color=bg, corner_radius=5, height=28)
+        c_frame.pack(fill="x", padx=2, pady=1)
+        c_frame.grid_columnconfigure(0, weight=1)
+
+        pad_left = 28 if indent else 8
+        display_title = c_info.title if c_info.title else c_info.conv_id[:12]
+        if len(display_title) > 34:
+            display_title = display_title[:32] + "…"
+
+        title_col = FG_USER if is_sel else FG_PRIMARY
+        title_lbl = ctk.CTkLabel(
+            c_frame,
+            text=display_title,
+            font=(FONT_FAMILY, 11),
+            anchor="w",
+            text_color=title_col,
+        )
+        title_lbl.grid(row=0, column=0, padx=(pad_left, 4), pady=2, sticky="w")
+
+        if c_info.rel_time:
+            time_lbl = ctk.CTkLabel(
+                c_frame,
+                text=c_info.rel_time,
+                font=(FONT_FAMILY, 10),
+                anchor="e",
+                text_color=FG_MUTED,
+            )
+            time_lbl.grid(row=0, column=1, padx=(2, 8), pady=2, sticky="e")
+
+        def on_click(e, info=c_info):
+            self.display_chat(info)
+
+        def on_rclick(e, info=c_info):
+            self._on_conv_context_menu(e, info)
+
+        for w in (c_frame, title_lbl):
+            w.bind("<Button-1>", on_click)
+            w.bind("<Button-3>", on_rclick)
+            if not is_sel:
+                w.bind("<Enter>", lambda e, f=c_frame: f.configure(fg_color=BG_HOVER))
+                w.bind("<Leave>", lambda e, f=c_frame: f.configure(fg_color="transparent"))
+
+    def _toggle_project_click(self, project_name: str, count: int):
+        if count == 0:
+            return  # Dossier vide : aucun espace vide créé
+        if project_name in self.expanded_projects:
+            self.expanded_projects.remove(project_name)
         else:
-            self.expanded_projects.discard(project_name)
+            self.expanded_projects.add(project_name)
         self._render_tree()
 
     # -------------------------------------------------------------
-    # Visionneuse de Chat
+    # Affichage instantané du Chat (Commence TOUT EN HAUT)
     # -------------------------------------------------------------
     def display_chat(self, info: ConversationInfo):
         self.selected_conv = info
@@ -648,139 +607,49 @@ class AntigravityManagerApp(ctk.CTk):
         title_text = info.title if info.title else "Conversation sans titre"
         self.chat_title_label.configure(text=title_text)
 
-        proj_str = f"Projet : {info.project}" if info.project else "Projet : (aucun)"
-        date_str = info.last_activity.strftime("%d/%m/%Y %H:%M") if info.last_activity else "Date inconnue"
-        self.chat_meta_label.configure(text=f"{proj_str}  •  {date_str}  •  ID: {info.conv_id}")
+        proj_str = f"📁 {info.project}" if info.project else "📁 (aucun projet)"
+        date_str = info.last_activity.strftime("%d/%m/%Y à %H:%M") if info.last_activity else "Date inconnue"
+        self.chat_meta_label.configure(text=f"{proj_str}   •   {date_str}   •   ID: {info.conv_id}")
 
-        for w in self.chat_messages_scroll.winfo_children():
-            w.destroy()
+        # Effacer et repeupler le Text widget instantanément
+        self.chat_text.config(state=tk.NORMAL)
+        self.chat_text.delete("1.0", tk.END)
 
         messages = load_chat_messages(info.conv_id)
 
         if not messages:
-            empty_lbl = ctk.CTkLabel(
-                self.chat_messages_scroll,
-                text="Aucun message trouvé dans l'historique de cette conversation.",
-                font=(FONT_FAMILY, 13),
-                text_color=FG_TEXT_MUTED,
-            )
-            empty_lbl.pack(pady=40)
+            self.chat_text.insert(tk.END, "\n\n\nAucun message trouvé dans l'historique de cette conversation.\n", "empty_tag")
+            self.chat_text.config(state=tk.DISABLED)
+            self.chat_text.yview_moveto(0.0)
             return
 
         for msg in messages:
             role = msg.get("role")
-            text = msg.get("text", "")
+            text = msg.get("text", "").strip()
             ts = msg.get("timestamp", "")
 
             if role == "user":
-                self._render_user_message(text, ts)
+                header_str = f"👤 Utilisateur   {ts}\n" if ts else "👤 Utilisateur\n"
+                self.chat_text.insert(tk.END, header_str, "user_title")
+                self.chat_text.insert(tk.END, f"{text}\n\n", "user_text")
             elif role == "model":
-                self._render_model_message(text, ts)
+                header_str = f"✨ Antigravity   {ts}\n" if ts else "✨ Antigravity\n"
+                self.chat_text.insert(tk.END, header_str, "model_title")
+                self.chat_text.insert(tk.END, f"{text}\n\n", "model_text")
 
-    def _render_user_message(self, text: str, timestamp: str):
-        card = ctk.CTkFrame(
-            self.chat_messages_scroll,
-            fg_color=BG_USER_BUBBLE,
-            border_color=BORDER_USER_BUBBLE,
-            border_width=1,
-            corner_radius=8,
-        )
-        card.pack(fill="x", padx=12, pady=(12, 6))
-        card.grid_columnconfigure(0, weight=1)
+            self.chat_text.insert(tk.END, "─" * 60 + "\n\n", "sep_tag")
 
-        header = ctk.CTkFrame(card, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
-        header.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            header,
-            text="Utilisateur",
-            font=(FONT_FAMILY, 11, "bold"),
-            text_color=ACCENT_COLOR,
-            anchor="w",
-        ).grid(row=0, column=0, sticky="w")
-
-        if timestamp:
-            ctk.CTkLabel(
-                header,
-                text=timestamp,
-                font=(FONT_FAMILY, 10),
-                text_color=FG_TEXT_MUTED,
-                anchor="e",
-            ).grid(row=0, column=1, sticky="e")
-
-        txt_box = ctk.CTkTextbox(
-            card,
-            font=(FONT_FAMILY, 12),
-            fg_color="transparent",
-            text_color=FG_TEXT_PRIMARY,
-            wrap="word",
-            border_width=0,
-            activate_scrollbars=False,
-        )
-        txt_box.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
-        txt_box.insert("1.0", text)
-        txt_box.configure(state="disabled")
-
-        line_count = len(text.splitlines())
-        calc_height = max(40, min(line_count * 20 + 20, 300))
-        txt_box.configure(height=calc_height)
-
-    def _render_model_message(self, text: str, timestamp: str):
-        card = ctk.CTkFrame(
-            self.chat_messages_scroll,
-            fg_color=BG_MODEL_CARD,
-            border_color=BORDER_MODEL_CARD,
-            border_width=1,
-            corner_radius=8,
-        )
-        card.pack(fill="x", padx=12, pady=(6, 12))
-        card.grid_columnconfigure(0, weight=1)
-
-        header = ctk.CTkFrame(card, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 4))
-        header.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            header,
-            text="Antigravity",
-            font=(FONT_FAMILY, 11, "bold"),
-            text_color=FG_SECTION_TITLE,
-            anchor="w",
-        ).grid(row=0, column=0, sticky="w")
-
-        if timestamp:
-            ctk.CTkLabel(
-                header,
-                text=timestamp,
-                font=(FONT_FAMILY, 10),
-                text_color=FG_TEXT_MUTED,
-                anchor="e",
-            ).grid(row=0, column=1, sticky="e")
-
-        txt_box = ctk.CTkTextbox(
-            card,
-            font=(FONT_FAMILY, 12),
-            fg_color="transparent",
-            text_color=FG_TEXT_PRIMARY,
-            wrap="word",
-            border_width=0,
-            activate_scrollbars=False,
-        )
-        txt_box.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
-        txt_box.insert("1.0", text)
-        txt_box.configure(state="disabled")
-
-        line_count = len(text.splitlines())
-        calc_height = max(50, min(line_count * 20 + 25, 600))
-        txt_box.configure(height=calc_height)
+        self.chat_text.config(state=tk.DISABLED)
+        # Positionnement forcé au début tout en haut
+        self.chat_text.yview_moveto(0.0)
 
     def _clear_chat_viewer(self):
         self.selected_conv = None
         self.chat_title_label.configure(text="Sélectionnez une conversation")
-        self.chat_meta_label.configure(text="Cliquez sur un projet ou une conversation à gauche pour afficher les échanges.")
-        for w in self.chat_messages_scroll.winfo_children():
-            w.destroy()
+        self.chat_meta_label.configure(text="Cliquez sur une conversation à gauche pour afficher les échanges.")
+        self.chat_text.config(state=tk.NORMAL)
+        self.chat_text.delete("1.0", tk.END)
+        self.chat_text.config(state=tk.DISABLED)
 
     def _copy_current_conv_id(self):
         if self.selected_conv:
@@ -834,13 +703,13 @@ class AntigravityManagerApp(ctk.CTk):
         )
         menu.add_separator()
         menu.add_command(
-            label=f"Supprimer la conversation",
+            label="Supprimer la conversation",
             command=lambda: self._delete_conversation_action(info),
         )
         menu.tk_popup(event.x_root, event.y_root)
 
     # -------------------------------------------------------------
-    # Implémentation des Actions
+    # Exécution des Actions
     # -------------------------------------------------------------
     def _rename_project_action(self, old_name: str):
         dialog = ctk.CTkInputDialog(
@@ -913,7 +782,7 @@ class AntigravityManagerApp(ctk.CTk):
             try:
                 shutil.rmtree(brain_path)
             except Exception as e:
-                messagebox.showerror("Erreur", f"Erreur lors de la suppression du brain : {e}")
+                messagebox.showerror("Erreur", f"Erreur suppression brain : {e}")
                 return
 
         db_path = conversations_dir / f"{info.conv_id}.db"
