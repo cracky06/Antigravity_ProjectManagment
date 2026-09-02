@@ -113,3 +113,4 @@ Antigravity_ProjectManagment/
 7. **Mémoire Vive Partagée (`echange_IA.md`)** :
    * Au démarrage de chaque session, lire systématiquement [`echange_IA.md`](./echange_IA.md).
    * À la fin d'une évolution majeure ou d'une release, mettre à jour `echange_IA.md` avec la date, le numéro de version et les décisions clés.
+8. **Versioning — Source Unique de Vérité** : Le fichier [`VERSION`](./VERSION) est **la seule source officielle** du numéro de version. La barre de titre de la fenêtre lit ce fichier dynamiquement via `get_app_version()` → `config.py`. Ne jamais hard-coder le numéro de version dans `antigravity_manager.py` ou `echange_IA.md`. Lors d'une release, utiliser `scripts/release.ps1` qui met à jour `VERSION` et crée le tag Git.

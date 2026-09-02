@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QSize, QUrl
-from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction
+from PyQt6.QtCore import Qt, QSize, QUrl, QTimer
+from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut, QTextDocument
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -188,6 +188,41 @@ QScrollBar::handle:vertical:hover {
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
+
+/* Champ de recherche globale (sidebar) */
+QLineEdit#searchInput {
+    background-color: #27272a;
+    border: 1px solid #3f3f46;
+    border-radius: 6px;
+    color: #f4f4f5;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+QLineEdit#searchInput:focus {
+    border-color: #60a5fa;
+}
+
+/* Barre de recherche locale (find bar) */
+QFrame#findBar {
+    background-color: #1f1f23;
+    border-bottom: 1px solid #27272a;
+}
+QLineEdit#findInput {
+    background-color: #27272a;
+    border: 1px solid #3f3f46;
+    border-radius: 5px;
+    color: #f4f4f5;
+    font-size: 12px;
+    padding: 4px 7px;
+}
+QLineEdit#findInput:focus {
+    border-color: #60a5fa;
+}
+QLabel#findResultLabel {
+    color: #71717a;
+    font-size: 11px;
+    min-width: 90px;
+}
 """
 
 LIGHT_QSS = """
@@ -310,7 +345,65 @@ QScrollBar::handle:vertical:hover {
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
+
+/* Champ de recherche globale (sidebar) */
+QLineEdit#searchInput {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #0f172a;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+QLineEdit#searchInput:focus {
+    border-color: #2563eb;
+}
+
+/* Barre de recherche locale (find bar) */
+QFrame#findBar {
+    background-color: #f1f5f9;
+    border-bottom: 1px solid #e2e8f0;
+}
+QLineEdit#findInput {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    color: #0f172a;
+    font-size: 12px;
+    padding: 4px 7px;
+}
+QLineEdit#findInput:focus {
+    border-color: #2563eb;
+}
+QLabel#findResultLabel {
+    color: #64748b;
+    font-size: 11px;
+    min-width: 90px;
+}
 """
+
+
+# =====================================================================
+# QLineEdit personnalisé pour la Find Bar (gestion locale de la touche Échap)
+# =====================================================================
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtGui import QKeyEvent
+
+class _FindLineEdit(QLineEdit):
+    """QLineEdit qui émet escape_pressed quand l'utilisateur appuie sur Échap.
+
+    Cela permet de fermer la find bar sans recourir à un QShortcut global
+    (qui peut capturer Échap au niveau de la fenêtre et la fermer silencieusement
+    dans les builds PyInstaller --windowed).
+    """
+
+    escape_pressed = pyqtSignal()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
+        if event.key() == Qt.Key.Key_Escape:
+            self.escape_pressed.emit()
+        else:
+            super().keyPressEvent(event)
 
 
 # =====================================================================
@@ -546,6 +639,12 @@ class AntigravityManagerWindow(QMainWindow):
         self.selected_conv: ConversationInfo | None = None
         self.show_raw_markdown: bool = False
         self.changelog_dialog: ChangelogDialog | None = None
+        self._last_search_query: str = ""
+
+        # Timer debounce pour la recherche globale (400ms)
+        self._search_timer = QTimer()
+        self._search_timer.setSingleShot(True)
+        self._search_timer.timeout.connect(self._do_search)
 
         self._apply_theme()
         self._build_ui()
@@ -615,6 +714,14 @@ class AntigravityManagerWindow(QMainWindow):
 
         sidebar_layout.addLayout(sb_header)
 
+        # Champ de recherche globale (au-dessus du filtre projet)
+        self.search_input = QLineEdit()
+        self.search_input.setObjectName("searchInput")
+        self.search_input.setPlaceholderText("🔍  Rechercher dans les discussions…")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._on_search_text_changed)
+        sidebar_layout.addWidget(self.search_input)
+
         # Filtre par projet
         self.project_filter_combo = QComboBox()
         self.project_filter_combo.setObjectName("projectFilterCombo")
@@ -656,6 +763,15 @@ class AntigravityManagerWindow(QMainWindow):
         header_vbox.setSpacing(4)
 
         header_top_row = QHBoxLayout()
+
+        # Bouton retour (historique natif QTextBrowser)
+        self.btn_back = QPushButton("←")
+        self.btn_back.setProperty("class", "toolBtn")
+        self.btn_back.setToolTip("Revenir à la page précédente")
+        self.btn_back.setFixedWidth(32)
+        self.btn_back.setVisible(False)
+        header_top_row.addWidget(self.btn_back)
+
         self.chat_title = QLabel("Sélectionnez une conversation")
         self.chat_title.setObjectName("chatTitle")
         header_top_row.addWidget(self.chat_title)
@@ -667,6 +783,13 @@ class AntigravityManagerWindow(QMainWindow):
         self.btn_toggle_raw.clicked.connect(self._toggle_markdown_mode)
         self.btn_toggle_raw.setVisible(False)
         header_top_row.addWidget(self.btn_toggle_raw)
+
+        self.btn_find_toggle = QPushButton("🔍")
+        self.btn_find_toggle.setProperty("class", "toolBtn")
+        self.btn_find_toggle.setToolTip("Rechercher dans la discussion (Ctrl+F)")
+        self.btn_find_toggle.clicked.connect(self._toggle_find_bar)
+        self.btn_find_toggle.setVisible(False)
+        header_top_row.addWidget(self.btn_find_toggle)
 
         self.btn_open_folder = QPushButton("📂 Ouvrir le dossier")
         self.btn_open_folder.setProperty("class", "toolBtn")
@@ -683,6 +806,49 @@ class AntigravityManagerWindow(QMainWindow):
 
         chat_layout.addWidget(self.chat_header)
 
+        # Barre de recherche locale dans la discussion (Find Bar)
+        self.find_bar = QFrame()
+        self.find_bar.setObjectName("findBar")
+        find_bar_layout = QHBoxLayout(self.find_bar)
+        find_bar_layout.setContentsMargins(8, 4, 8, 4)
+        find_bar_layout.setSpacing(4)
+
+        self.find_input = _FindLineEdit()
+        self.find_input.setObjectName("findInput")
+        self.find_input.setPlaceholderText("Rechercher dans la discussion…")
+        self.find_input.returnPressed.connect(self._find_next)
+        self.find_input.textChanged.connect(self._on_find_text_changed)
+        self.find_input.escape_pressed.connect(self._hide_find_bar)
+        find_bar_layout.addWidget(self.find_input)
+
+        self.find_result_label = QLabel("")
+        self.find_result_label.setObjectName("findResultLabel")
+        find_bar_layout.addWidget(self.find_result_label)
+
+        self._btn_find_prev = QPushButton("▲")
+        self._btn_find_prev.setProperty("class", "toolBtn")
+        self._btn_find_prev.setToolTip("Occurrence précédente")
+        self._btn_find_prev.setFixedWidth(28)
+        self._btn_find_prev.clicked.connect(self._find_prev)
+        find_bar_layout.addWidget(self._btn_find_prev)
+
+        self._btn_find_next = QPushButton("▼")
+        self._btn_find_next.setProperty("class", "toolBtn")
+        self._btn_find_next.setToolTip("Occurrence suivante")
+        self._btn_find_next.setFixedWidth(28)
+        self._btn_find_next.clicked.connect(self._find_next)
+        find_bar_layout.addWidget(self._btn_find_next)
+
+        self._btn_find_close = QPushButton("✕")
+        self._btn_find_close.setProperty("class", "toolBtn")
+        self._btn_find_close.setToolTip("Fermer la recherche (Échap)")
+        self._btn_find_close.setFixedWidth(28)
+        self._btn_find_close.clicked.connect(self._hide_find_bar)
+        find_bar_layout.addWidget(self._btn_find_close)
+
+        self.find_bar.setVisible(False)
+        chat_layout.addWidget(self.find_bar)
+
         # Navigateur de Chat HTML / CSS riche
         self.chat_browser = QTextBrowser()
         self.chat_browser.setObjectName("chatBrowser")
@@ -690,6 +856,16 @@ class AntigravityManagerWindow(QMainWindow):
         chat_layout.addWidget(self.chat_browser)
 
         self.splitter.addWidget(chat_container)
+
+        # Connecter l'historique de navigation au bouton retour
+        self.chat_browser.backwardAvailable.connect(self.btn_back.setVisible)
+        self.btn_back.clicked.connect(self.chat_browser.backward)
+
+        # Raccourci clavier : Ctrl+F → ouvrir la find bar
+        # Stocké en attribut d'instance pour éviter le garbage-collection Python
+        self._shortcut_find = QShortcut(QKeySequence("Ctrl+F"), self)
+        self._shortcut_find.activated.connect(self._show_find_bar)
+        # Note : Escape est géré directement par _FindLineEdit (voir classe dédiée)
 
         # Proportions initiales : 340px sidebar, reste pour le chat
         self.splitter.setSizes([340, 920])
@@ -702,7 +878,11 @@ class AntigravityManagerWindow(QMainWindow):
     # Chargement & Rendu des Données
     # -----------------------------------------------------------------
     def _on_filter_changed(self):
-        self._populate_tree()
+        """Réagit au changement de filtre projet. Relance la recherche si active."""
+        if hasattr(self, "search_input") and self.search_input.text().strip():
+            self._do_search()
+        else:
+            self._populate_tree()
 
     def reload_data(self):
         self._apply_theme()
@@ -927,6 +1107,7 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_meta.setText(f"{proj_str}   •   {date_str}   •   ID: {info.conv_id}")
         self.btn_open_folder.setVisible(True)
         self.btn_toggle_raw.setVisible(True)
+        self.btn_find_toggle.setVisible(True)
 
         messages = load_chat_messages(info.conv_id)
         is_dark = get_active_theme() == "dark"
@@ -987,6 +1168,8 @@ class AntigravityManagerWindow(QMainWindow):
                 }}
             </style></head><body>{escaped_raw}</body></html>"""
             self.chat_browser.setHtml(html)
+            # Pré-remplir la find bar si recherche globale active
+            self._prefill_find_from_search()
             return
 
         # Construction du document HTML moderne (Vue Riche)
@@ -1091,6 +1274,11 @@ class AntigravityManagerWindow(QMainWindow):
                     font-size: 12px;
                     color: {code_col};
                 }}
+                a {{
+                    color: {model_title_col};
+                    word-break: break-all;
+                    overflow-wrap: break-word;
+                }}
                 hr {{
                     border: 0;
                     height: 1px;
@@ -1153,6 +1341,8 @@ class AntigravityManagerWindow(QMainWindow):
         html_parts.append("</body></html>")
         full_html = "".join(html_parts)
         self.chat_browser.setHtml(full_html)
+        # Pré-remplir la find bar si recherche globale active
+        self._prefill_find_from_search()
 
     def _clear_chat(self):
         self.selected_conv = None
@@ -1160,7 +1350,11 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_meta.setText("Choisissez un projet ou une conversation dans la barre latérale.")
         self.btn_open_folder.setVisible(False)
         self.btn_toggle_raw.setVisible(False)
+        self.btn_find_toggle.setVisible(False)
         self.chat_browser.setHtml("")
+        self.find_bar.setVisible(False)
+        self.find_result_label.setText("")
+        self.btn_back.setVisible(False)
 
     def _open_current_session_folder(self):
         if not self.selected_conv:
@@ -1170,6 +1364,185 @@ class AntigravityManagerWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(brain_p)))
         else:
             QMessageBox.information(self, "Dossier introuvable", "Le dossier de cette session n'a pas été trouvé sur le disque.")
+
+    # -----------------------------------------------------------------
+    # Recherche Globale (Sidebar)
+    # -----------------------------------------------------------------
+    def _on_search_text_changed(self, text: str):
+        """Déclenche la recherche avec un debounce de 400ms."""
+        self._search_timer.stop()
+        if not text.strip():
+            self._last_search_query = ""
+            self._populate_tree()
+            projects_root, _, _, _, _ = get_paths()
+            total_p = len(self.project_convs)
+            total_c = len(self.all_convs)
+            self.status_bar.showMessage(
+                f"Racine : {projects_root} | {total_p} projets — {total_c} conversations"
+            )
+            return
+        self._search_timer.start(400)
+
+    def _do_search(self):
+        """Lance la recherche dans le périmètre filtré (respecte le filtre projet actif)."""
+        query = self.search_input.text().strip()
+        if not query:
+            return
+        self._last_search_query = query
+        scope = self._get_search_scope()
+        self.status_bar.showMessage(f"🔍 Recherche de « {query} » dans {len(scope)} conversation(s)…")
+        QApplication.processEvents()
+
+        results: dict[str, list[ConversationInfo]] = {}
+        for i, c_info in enumerate(scope):
+            if i % 5 == 0:
+                QApplication.processEvents()
+            messages = load_chat_messages(c_info.conv_id)
+            found = any(query.lower() in msg.get("text", "").lower() for msg in messages)
+            if found:
+                key = c_info.project or "⚠️ Sans projet"
+                results.setdefault(key, []).append(c_info)
+
+        total_found = sum(len(v) for v in results.values())
+        self.status_bar.showMessage(
+            f"🔍 {total_found} conversation(s) trouvée(s) pour « {query} »"
+        )
+        self._populate_tree_search_results(results, query)
+
+    def _get_search_scope(self) -> list[ConversationInfo]:
+        """Retourne la liste des conversations dans le périmètre du filtre actif."""
+        if not hasattr(self, "project_filter_combo"):
+            return self.all_convs
+        filter_val = self.project_filter_combo.currentData() or "ALL"
+        if filter_val == "ALL":
+            return self.all_convs
+        if filter_val == "NONE":
+            return [c for c in self.all_convs if not c.project]
+        if filter_val in self.project_convs:
+            return self.project_convs[filter_val]
+        return self.all_convs
+
+    def _populate_tree_search_results(
+        self, results: dict[str, list[ConversationInfo]], query: str
+    ):
+        """Peuple l'arbre avec uniquement les résultats de recherche groupes par projet."""
+        self.tree.clear()
+        is_dark = get_active_theme() == "dark"
+        header_color = QColor("#a1a1aa" if is_dark else "#64748b")
+        active_color = QColor("#f4f4f5" if is_dark else "#0f172a")
+        highlight_color = QColor("#f59e0b" if is_dark else "#d97706")
+
+        if not results:
+            no_result = QTreeWidgetItem([f"  Aucun résultat pour « {query} »"])
+            no_result.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            no_result.setForeground(0, header_color)
+            self.tree.addTopLevelItem(no_result)
+            return
+
+        total = sum(len(v) for v in results.values())
+        header_item = QTreeWidgetItem([f"🔍 RÉSULTATS : {total} conv. — « {query} »"])
+        header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        header_item.setForeground(0, highlight_color)
+        f = header_item.font(0)
+        f.setBold(True)
+        header_item.setFont(0, f)
+        self.tree.addTopLevelItem(header_item)
+
+        for proj_name, convs in sorted(results.items(), key=lambda x: x[0].lower()):
+            p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
+            p_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            p_item.setForeground(0, active_color)
+
+            for c_info in convs:
+                display_title = c_info.title if c_info.title else c_info.conv_id[:12]
+                if len(display_title) > 38:
+                    display_title = display_title[:36] + "…"
+                time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
+                c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
+                c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+                p_item.addChild(c_item)
+
+            p_item.setExpanded(True)
+            self.tree.addTopLevelItem(p_item)
+
+        header_item.setExpanded(True)
+
+    # -----------------------------------------------------------------
+    # Recherche Locale dans la Discussion (Find Bar)
+    # -----------------------------------------------------------------
+    def _prefill_find_from_search(self):
+        """Pré-remplit et affiche la find bar si une recherche globale est active."""
+        if hasattr(self, "search_input"):
+            q = self.search_input.text().strip()
+            if q:
+                self._show_find_bar(prefill=q)
+
+    def _show_find_bar(self, prefill: str = ""):
+        """Affiche la barre de recherche locale. Pré-remplit optionnellement le champ."""
+        if not self.selected_conv:
+            return
+        self.find_bar.setVisible(True)
+        if prefill and self.find_input.text() != prefill:
+            self.find_input.setText(prefill)
+        self.find_input.setFocus()
+        self.find_input.selectAll()
+        if self.find_input.text():
+            self._do_find_from_start()
+
+    def _toggle_find_bar(self):
+        """Bascule la visibilité de la find bar (bouton 🔍 dans le header)."""
+        if self.find_bar.isVisible():
+            self._hide_find_bar()
+        else:
+            self._show_find_bar()
+
+    def _hide_find_bar(self):
+        """Masque la barre de recherche locale et remet le focus sur le navigateur."""
+        self.find_bar.setVisible(False)
+        self.find_result_label.setText("")
+        self.chat_browser.setFocus()
+
+    def _on_find_text_changed(self):
+        """Réinitialise la recherche depuis le début quand le texte change."""
+        self._do_find_from_start()
+
+    def _do_find_from_start(self):
+        """Cherche depuis le début du document et met à jour le label de résultat."""
+        query = self.find_input.text()
+        if not query:
+            self.find_result_label.setText("")
+            return
+        cursor = self.chat_browser.textCursor()
+        cursor.movePosition(cursor.MoveOperation.Start)
+        self.chat_browser.setTextCursor(cursor)
+        found = self.chat_browser.find(query)
+        self.find_result_label.setText("Trouvé ✓" if found else "Aucun résultat")
+
+    def _find_next(self):
+        """Cherche l'occurrence suivante (avec wrap autour)."""
+        query = self.find_input.text()
+        if not query:
+            return
+        found = self.chat_browser.find(query)
+        if not found:
+            # Wrap : retour au début
+            cursor = self.chat_browser.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+            self.chat_browser.setTextCursor(cursor)
+            self.chat_browser.find(query)
+
+    def _find_prev(self):
+        """Cherche l'occurrence précédente (avec wrap autour)."""
+        query = self.find_input.text()
+        if not query:
+            return
+        found = self.chat_browser.find(query, QTextDocument.FindFlag.FindBackward)
+        if not found:
+            # Wrap : aller à la fin
+            cursor = self.chat_browser.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.chat_browser.setTextCursor(cursor)
+            self.chat_browser.find(query, QTextDocument.FindFlag.FindBackward)
 
     # -----------------------------------------------------------------
     # Menus Contextuels (Clic Droit)
@@ -1286,6 +1659,21 @@ class AntigravityManagerWindow(QMainWindow):
 # Point d'entrée de l'application
 # =====================================================================
 def main():
+    import traceback
+    import datetime
+
+    # Chemin du log d'erreur : à côté du .exe (frozen) ou du script (dev)
+    _log_path = (
+        Path(sys.executable).resolve().parent / "crash.log"
+        if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent / "crash.log"
+    )
+    # Marqueur de démarrage (confirme que main() est bien atteinte)
+    try:
+        _log_path.write_text(f"[{datetime.datetime.now()}] main() démarrée\n", encoding="utf-8")
+    except Exception:
+        pass
+
     if sys.platform == "win32":
         try:
             import ctypes
@@ -1293,20 +1681,33 @@ def main():
         except Exception:
             pass
 
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
 
-    app_icon = _get_app_icon()
-    if not app_icon.isNull():
-        app.setWindowIcon(app_icon)
+        app_icon = _get_app_icon()
+        if not app_icon.isNull():
+            app.setWindowIcon(app_icon)
 
-    active_theme = get_active_theme()
-    app.setStyleSheet(DARK_QSS if active_theme == "dark" else LIGHT_QSS)
+        active_theme = get_active_theme()
+        app.setStyleSheet(DARK_QSS if active_theme == "dark" else LIGHT_QSS)
 
-    window = AntigravityManagerWindow()
-    window.show()
+        window = AntigravityManagerWindow()
+        window.show()
 
-    sys.exit(app.exec())
+        sys.exit(app.exec())
+    except SystemExit:
+        raise  # Sortie normale, ne pas loguer
+    except Exception:
+        err = traceback.format_exc()
+        try:
+            _log_path.write_text(
+                f"[{datetime.datetime.now()}] CRASH:\n{err}",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":

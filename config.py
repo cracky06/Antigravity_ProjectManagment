@@ -99,15 +99,26 @@ def get_active_theme() -> str:
 # Gestion des Versions & Changelog
 # -----------------------------------------------------------------
 def get_app_version() -> str:
-    """Lit le numéro de version depuis le fichier VERSION ou fallback sur 1.0."""
-    version_file = _get_base_dir() / "VERSION"
-    if version_file.is_file():
-        try:
-            v = version_file.read_text(encoding="utf-8").strip()
-            if v:
-                return v
-        except Exception:
-            pass
+    """Lit le numéro de version depuis le fichier VERSION.
+
+    En mode PyInstaller --onefile, VERSION est embarqué dans sys._MEIPASS.
+    En mode développement ou --onedir, il est à côté de l'exécutable.
+    """
+    candidates: list[Path] = []
+    # 1. Dossier temporaire PyInstaller (_MEIPASS) — prioritaire en mode --onefile
+    if hasattr(sys, "_MEIPASS"):
+        candidates.append(Path(getattr(sys, "_MEIPASS")) / "VERSION")
+    # 2. Répertoire de l'exécutable (mode --onedir ou développement)
+    candidates.append(_get_base_dir() / "VERSION")
+
+    for version_file in candidates:
+        if version_file.is_file():
+            try:
+                v = version_file.read_text(encoding="utf-8").strip()
+                if v:
+                    return v
+            except Exception:
+                pass
     return "1.0"
 
 
@@ -127,6 +138,20 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.2": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Recherche globale dans le contenu de toutes les discussions (barre de recherche au-dessus du filtre projet)",
+                "Filtrage des résultats de recherche selon le projet sélectionné dans le combo",
+                "Barre de recherche locale (Find Bar) dans la vue discussion avec navigation ▲/▼ et wrap-around",
+                "Pré-remplissage automatique de la find bar depuis la recherche globale",
+                "Bouton ← Retour dans le header du chat (historique de navigation natif QTextBrowser)",
+                "Bouton 🔍 dans le header pour ouvrir ou fermer la barre de recherche locale",
+            ],
+            "🐛 Corrections (fix)": [
+                "Fix word-wrap des liens file:/// dans la vue discussion (débordements horizontaux éliminés)",
+                "Fix lecture du fichier VERSION en mode --onefile PyInstaller (détection via sys._MEIPASS)",
+            ],
+        },
         "v1.1": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Intégration du parseur Markdown officiel avec prise en charge complète de la syntaxe (# titres, **gras**, listes, code)",

@@ -40,8 +40,13 @@
   - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
   - Extraction du workspace sécurisée : dé-échappement des sauts de ligne, exclusion des chemins internes (.gemini, brain, Temp), détection des `SearchPath` / `Cwd` et élimination des faux projets (`n`, `nLast`).
   - Rendu riche de fallback pour les sessions de sous-agents : affichage automatique des artéfacts markdown, des médias/images générés et du résumé des opérations techniques.
-- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.1) :
-  - Barre de titre avec numéro de version officiel : `Antigravity Manager v1.1 — Project & Chat Management`.
+- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.2) :
+  - Barre de titre avec numéro de version lu dynamiquement depuis `VERSION` via `get_app_version()` (jamais hard-codé).
+  - **[v1.2] Champ de recherche globale** au-dessus du filtre projet dans la sidebar : filtre projets et conversations en cherchant dans le contenu de toutes les discussions du périmètre actif. Debounce 400ms, affichage du nombre de résultats dans la status bar.
+  - **[v1.2] Respect du filtre projet dans la recherche** : si un projet est sélectionné dans le combo, la recherche ne porte que sur ses conversations.
+  - **[v1.2] Barre de recherche locale (Find Bar)** sous le header du chat : pré-remplie automatiquement depuis la recherche globale, navigation ▲/▼ avec wrap-around, raccourci `Ctrl+F` pour ouvrir, `Échap` pour fermer.
+  - **[v1.2] Bouton ← Retour** dans le header du chat : utilise l'historique natif `QTextBrowser.backward()`, visible seulement quand un historique existe.
+  - **[v1.2] Fix word-wrap des liens** `file:///` : ajout de `word-break: break-all` dans le CSS HTML embarqué pour éviter les débordements horizontaux.
   - Intégration de l'icône officielle de l'application (`assets/icon.png` / `assets/icon.ico`) dans la barre latérale, la barre de titre et la barre des tâches Windows via `SetCurrentProcessExplicitAppUserModelID`.
   - Boîte déroulante de filtre par projet en haut de la barre latérale : *Tous les projets*, *Sans projet (orphelines)*, ou *Projet individuel*.
   - Dépliage intelligent : dossiers repliés par défaut en vue globale (« Tous les projets »), dépliés automatiquement en vue filtrée.
@@ -54,5 +59,5 @@
   - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné.
   - Menus contextuels complets (déplacement / réassignation vers un autre projet, suppression en cascade, copie ID, ouverture dossier brain/projet).
 - `assets/` : icône officielle du gestionnaire (`icon.png` 1024x1024 transparent, `icon.ico` multi-résolution).
-- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (15 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`) et le fichier `VERSION`.
+- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (16 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`) et le fichier `VERSION`.
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.
