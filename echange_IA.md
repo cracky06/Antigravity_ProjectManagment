@@ -28,8 +28,10 @@
 - `config.py` : gère la persistance des chemins dans `config.json` (auto-détection dynamique `antigravity-ide` et racine projet, compatible `sys.frozen`).
 - `data_loader.py` :
   - Découverte multi-dossiers résiliente d'`agyhub_summaries_proto.pb`.
+  - Priorisation du format compact `transcript.jsonl` et pré-filtrage des lignes `USER_INPUT`/`PLANNER_RESPONSE` pour une lecture ultra-rapide.
+  - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
   - Extraction du workspace depuis les transcripts si absent du proto (`Active Document:` / URIs).
   - Filtrage des stubs de sous-agents orphelins et fallback sur les artéfacts markdown (`walkthrough.md`, `task.md`, `implementation_plan.md`).
-- `antigravity_manager.py` : interface graphique CustomTkinter avec chevrons interactifs (`▼`/`▶`), auto-dépliage des projets actifs au lancement, suppression en cascade et visionneuse de chat instantanée.
+- `antigravity_manager.py` : interface graphique CustomTkinter avec sélection légère (0 ms sans reconstruction de l'arbre), chevrons interactifs (`▼`/`▶`), auto-dépliage des projets actifs au lancement, suppression en cascade et visionneuse de chat instantanée.
 - `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la détection du `.venv` et le packaging PyInstaller.
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.

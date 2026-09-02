@@ -203,6 +203,7 @@ class AntigravityManagerApp(ctk.CTk):
         self.project_convs: dict[str, list[ConversationInfo]] = {}
         self.all_convs: list[ConversationInfo] = []
         self.expanded_projects: set[str] = set()
+        self.conv_widgets: dict[str, list[tuple[ctk.CTkFrame, ctk.CTkLabel]]] = {}
         self.selected_conv: ConversationInfo | None = None
 
         self._build_ui()
@@ -469,6 +470,7 @@ class AntigravityManagerApp(ctk.CTk):
     # Arborescence latérale (Optimisée)
     # -------------------------------------------------------------
     def _render_tree(self):
+        self.conv_widgets.clear()
         for w in self.tree_scroll.winfo_children():
             w.destroy()
 
@@ -572,6 +574,9 @@ class AntigravityManagerApp(ctk.CTk):
         )
         title_lbl.grid(row=0, column=0, padx=(pad_left, 4), pady=2, sticky="w")
 
+        # Enregistrer dans le cache de widgets pour mise à jour rapide de la sélection
+        self.conv_widgets.setdefault(c_info.conv_id, []).append((c_frame, title_lbl))
+
         if c_info.rel_time:
             time_lbl = ctk.CTkLabel(
                 c_frame,
@@ -591,9 +596,12 @@ class AntigravityManagerApp(ctk.CTk):
         for w in (c_frame, title_lbl):
             w.bind("<Button-1>", on_click)
             w.bind("<Button-3>", on_rclick)
-            if not is_sel:
-                w.bind("<Enter>", lambda e, f=c_frame: f.configure(fg_color=BG_HOVER))
-                w.bind("<Leave>", lambda e, f=c_frame: f.configure(fg_color="transparent"))
+            def make_hover(f=c_frame, cid=c_info.conv_id):
+                return lambda e: f.configure(fg_color=BG_HOVER) if not (self.selected_conv and self.selected_conv.conv_id == cid) else None
+            def make_leave(f=c_frame, cid=c_info.conv_id):
+                return lambda e: f.configure(fg_color=BG_SELECTED if (self.selected_conv and self.selected_conv.conv_id == cid) else "transparent")
+            w.bind("<Enter>", make_hover())
+            w.bind("<Leave>", make_leave())
 
     def _toggle_project_click(self, project_name: str, count: int):
         if count == 0:
@@ -608,8 +616,25 @@ class AntigravityManagerApp(ctk.CTk):
     # Affichage instantané du Chat (Commence TOUT EN HAUT)
     # -------------------------------------------------------------
     def display_chat(self, info: ConversationInfo):
+        # Mise à jour visuelle légère sans reconstruire l'arbre complet
+        old_id = self.selected_conv.conv_id if self.selected_conv else None
         self.selected_conv = info
-        self._render_tree()
+
+        if old_id and old_id in self.conv_widgets:
+            for frame, lbl in self.conv_widgets[old_id]:
+                try:
+                    frame.configure(fg_color="transparent")
+                    lbl.configure(text_color=FG_PRIMARY)
+                except Exception:
+                    pass
+
+        if info.conv_id in self.conv_widgets:
+            for frame, lbl in self.conv_widgets[info.conv_id]:
+                try:
+                    frame.configure(fg_color=BG_SELECTED)
+                    lbl.configure(text_color=FG_USER)
+                except Exception:
+                    pass
 
         title_text = info.title if info.title else "Conversation sans titre"
         self.chat_title_label.configure(text=title_text)

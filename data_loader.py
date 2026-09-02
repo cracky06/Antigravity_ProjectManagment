@@ -281,7 +281,7 @@ def _find_brain_path(conv_id: str) -> Path | None:
 
 
 def _find_transcript_file(conv_id: str) -> Path | None:
-    """Trouve le fichier transcript le plus complet disponible pour une conversation."""
+    """Trouve le fichier transcript pour une conversation (priorité à transcript.jsonl compact)."""
     _, antigravity_root, brain_dir, _, _ = get_paths()
     dirs_to_check = [brain_dir / conv_id]
     gemini_parent = antigravity_root.parent
@@ -293,13 +293,118 @@ def _find_transcript_file(conv_id: str) -> Path | None:
     for b_dir in dirs_to_check:
         if not b_dir.is_dir():
             continue
-        t_full = b_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
-        if t_full.is_file():
-            return t_full
+        # Priorité au transcript compact pour une vitesse maximale
         t_compact = b_dir / ".system_generated" / "logs" / "transcript.jsonl"
         if t_compact.is_file():
             return t_compact
+        t_full = b_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+        if t_full.is_file():
+            return t_full
     return None
+
+
+# Cache mémoire pour chargement instantané des messages déjà consultés
+_CHAT_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
+# -----------------------------------------------------------------
+# Chargement des messages d'une conversation pour le Chat Viewer
+# -----------------------------------------------------------------
+def load_chat_messages(conv_id: str) -> list[dict]:
+    """Extrait tous les messages du chat ordonnés pour l'affichage (avec cache haute performance)."""
+    transcript = _find_transcript_file(conv_id)
+
+    if transcript and transcript.is_file():
+        try:
+            mtime = transcript.stat().st_mtime
+            if conv_id in _CHAT_CACHE and _CHAT_CACHE[conv_id][0] == mtime:
+                return _CHAT_CACHE[conv_id][1]
+        except Exception:
+            pass
+
+    messages = []
+
+    if transcript and transcript.is_file():
+        try:
+            with transcript.open(encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    # Pré-filtrage ultra-rapide avant json.loads
+                    if '"USER_INPUT"' not in line and '"PLANNER_RESPONSE"' not in line:
+                        continue
+
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+
+                    stype = obj.get("type")
+                    source = obj.get("source")
+                    content = obj.get("content", "")
+                    ts = obj.get("created_at", "")
+                    time_display = ""
+                    if ts:
+                        try:
+                            pdt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            time_display = pdt.strftime("%d/%m %H:%M")
+                        except Exception:
+                            time_display = ts[:16]
+
+                    # Message utilisateur
+                    if stype == "USER_INPUT" and source == "USER_EXPLICIT":
+                        raw = content.strip()
+                        m = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", raw, re.DOTALL)
+                        text = m.group(1).strip() if m else raw
+                        text = re.sub(r"<[^>]+>", "", text).strip()
+                        if text and not text.startswith("The following is a summary"):
+                            messages.append({
+                                "role": "user",
+                                "text": text,
+                                "timestamp": time_display,
+                            })
+
+                    # Réponse visible du modèle
+                    elif stype == "PLANNER_RESPONSE" and source == "MODEL":
+                        text = content.strip()
+                        if text:
+                            messages.append({
+                                "role": "model",
+                                "text": text,
+                                "timestamp": time_display,
+                            })
+
+            try:
+                _CHAT_CACHE[conv_id] = (transcript.stat().st_mtime, messages)
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+    # Si aucun message de log mais des artéfacts sont présents sur disque
+    if not messages:
+        brain_path = _find_brain_path(conv_id)
+        if brain_path and brain_path.is_dir():
+            for doc_name, label in [
+                ("walkthrough.md", "📝 Walkthrough & Synthèse"),
+                ("implementation_plan.md", "📋 Plan d'implémentation"),
+                ("task.md", "📌 Tâche"),
+            ]:
+                doc_file = brain_path / doc_name
+                if doc_file.is_file():
+                    try:
+                        doc_content = doc_file.read_text(encoding="utf-8", errors="ignore").strip()
+                        if doc_content:
+                            display_doc = doc_content[:4000] + ("\n\n[...suite tronquée...]" if len(doc_content) > 4000 else "")
+                            messages.append({
+                                "role": "model",
+                                "text": f"### {label} (extrait de session)\n\n{display_doc}",
+                                "timestamp": "",
+                            })
+                            break
+                    except Exception:
+                        pass
+
+    return messages
 
 
 # -----------------------------------------------------------------
@@ -544,84 +649,3 @@ def delete_project_cascade(project_name: str, convs_to_delete: list[str]) -> tup
         return False, "\n".join(errors)
     return True, "Suppression effectuée avec succès."
 
-
-# -----------------------------------------------------------------
-# Chargement des messages d'une conversation pour le Chat Viewer
-# -----------------------------------------------------------------
-def load_chat_messages(conv_id: str) -> list[dict]:
-    """Extrait tous les messages du chat ordonnés pour l'affichage."""
-    transcript = _find_transcript_file(conv_id)
-    messages = []
-
-    if transcript and transcript.is_file():
-        try:
-            with transcript.open(encoding="utf-8") as fh:
-                for line in fh:
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-
-                    stype = obj.get("type")
-                    source = obj.get("source")
-                    content = obj.get("content", "")
-                    ts = obj.get("created_at", "")
-                    time_display = ""
-                    if ts:
-                        try:
-                            pdt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                            time_display = pdt.strftime("%d/%m %H:%M")
-                        except Exception:
-                            time_display = ts[:16]
-
-                    # Message utilisateur
-                    if stype == "USER_INPUT" and source == "USER_EXPLICIT":
-                        raw = content.strip()
-                        m = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", raw, re.DOTALL)
-                        text = m.group(1).strip() if m else raw
-                        text = re.sub(r"<[^>]+>", "", text).strip()
-                        if text and not text.startswith("The following is a summary"):
-                            messages.append({
-                                "role": "user",
-                                "text": text,
-                                "timestamp": time_display,
-                            })
-
-                    # Réponse visible du modèle
-                    elif stype == "PLANNER_RESPONSE" and source == "MODEL":
-                        text = content.strip()
-                        if text:
-                            messages.append({
-                                "role": "model",
-                                "text": text,
-                                "timestamp": time_display,
-                            })
-
-        except Exception:
-            pass
-
-    # Si aucun message de log mais des artéfacts sont présents sur disque
-    if not messages:
-        brain_path = _find_brain_path(conv_id)
-        if brain_path and brain_path.is_dir():
-            for doc_name, label in [
-                ("walkthrough.md", "📝 Walkthrough & Synthèse"),
-                ("implementation_plan.md", "📋 Plan d'implémentation"),
-                ("task.md", "📌 Tâche"),
-            ]:
-                doc_file = brain_path / doc_name
-                if doc_file.is_file():
-                    try:
-                        doc_content = doc_file.read_text(encoding="utf-8", errors="ignore").strip()
-                        if doc_content:
-                            display_doc = doc_content[:4000] + ("\n\n[...suite tronquée...]" if len(doc_content) > 4000 else "")
-                            messages.append({
-                                "role": "model",
-                                "text": f"### {label} (extrait de session)\n\n{display_doc}",
-                                "timestamp": "",
-                            })
-                            break
-                    except Exception:
-                        pass
-
-    return messages
