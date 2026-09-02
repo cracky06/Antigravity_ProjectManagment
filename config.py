@@ -138,13 +138,23 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.3": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Aperçu du contenu des fichiers référencés : un clic sur un lien fichier affiche son contenu directement dans la vue discussion (jamais d'exécution), avec coloration syntaxique Pygments (.py, .bat, .ps1, .json, .yaml…)",
+                "Bouton ← Retour repensé : revient à la conversation précédente, ou depuis un aperçu de fichier à la conversation d'origine (un seul niveau)",
+            ],
+            "🐛 Corrections (fix)": [
+                "Les liens de fichiers (.py, .bat, .ps1, .json…) ne sont plus ouverts avec leur application associée — fin des exécutions accidentelles (ex. un clic sur build.bat lançait le build de l'app depuis une conversation)",
+                "Fix du bouton ← qui, à cause de la navigation interne de QTextBrowser sur les liens file:///, renvoyait au dernier lien ouvert au lieu de la conversation, puis disparaissait en laissant une page vide",
+                "Fix word-wrap dans la vue discussion : les blocs de code et commandes longues (.bat/.ps1/.json) s'enroulent au lieu de déborder horizontalement (pre, pre code, code inline)",
+            ],
+        },
         "v1.2": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Recherche globale dans le contenu de toutes les discussions (barre de recherche au-dessus du filtre projet)",
                 "Filtrage des résultats de recherche selon le projet sélectionné dans le combo",
                 "Barre de recherche locale (Find Bar) dans la vue discussion avec navigation ▲/▼ et wrap-around",
                 "Pré-remplissage automatique de la find bar depuis la recherche globale",
-                "Bouton ← Retour dans le header du chat (historique de navigation natif QTextBrowser)",
                 "Bouton 🔍 dans le header pour ouvrir ou fermer la barre de recherche locale",
             ],
             "🐛 Corrections (fix)": [

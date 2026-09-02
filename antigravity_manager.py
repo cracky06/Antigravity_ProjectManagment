@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
+    QTreeWidgetItemIterator,
     QTextBrowser,
     QLabel,
     QPushButton,
@@ -64,6 +65,14 @@ try:
     import markdown
 except ImportError:
     markdown = None
+
+try:
+    from pygments import highlight as _pyg_highlight
+    from pygments.lexers import get_lexer_for_filename, TextLexer
+    from pygments.formatters import HtmlFormatter as _PygHtmlFormatter
+    from pygments.util import ClassNotFound as _PygClassNotFound
+except ImportError:  # pragma: no cover - pygments est une dépendance déclarée
+    _pyg_highlight = None
 
 # =====================================================================
 # STYLES CSS / QSS (Thèmes Clair & Sombre Antigravity)
@@ -639,7 +648,19 @@ class AntigravityManagerWindow(QMainWindow):
         self.selected_conv: ConversationInfo | None = None
         self.show_raw_markdown: bool = False
         self.changelog_dialog: ChangelogDialog | None = None
-        self._last_search_query: str = ""
+
+        # Historique de navigation entre conversations (pile maison, alimentée
+        # par display_chat). Le bouton ← dépile pour revenir à la conversation
+        # précédente. On n'utilise plus l'historique interne de QTextBrowser
+        # (celui-ci était pollué par les clics sur les liens file:///).
+        self._nav_history: list[ConversationInfo] = []
+        self._nav_suppress_push: bool = False
+
+        # État « aperçu de fichier » : quand on clique un lien fichier dans une
+        # conversation, on affiche son contenu dans la vue et le bouton ←
+        # restaure la conversation mémorisée ici.
+        self._file_view_active: bool = False
+        self._file_view_return_conv: ConversationInfo | None = None
 
         # Timer debounce pour la recherche globale (400ms)
         self._search_timer = QTimer()
@@ -764,12 +785,14 @@ class AntigravityManagerWindow(QMainWindow):
 
         header_top_row = QHBoxLayout()
 
-        # Bouton retour (historique natif QTextBrowser)
+        # Bouton retour : revient à la conversation précédemment consultée
+        # (pile d'historique maison self._nav_history).
         self.btn_back = QPushButton("←")
         self.btn_back.setProperty("class", "toolBtn")
-        self.btn_back.setToolTip("Revenir à la page précédente")
+        self.btn_back.setToolTip("Revenir à la conversation précédente")
         self.btn_back.setFixedWidth(32)
         self.btn_back.setVisible(False)
+        self.btn_back.clicked.connect(self._navigate_back)
         header_top_row.addWidget(self.btn_back)
 
         self.chat_title = QLabel("Sélectionnez une conversation")
@@ -852,14 +875,16 @@ class AntigravityManagerWindow(QMainWindow):
         # Navigateur de Chat HTML / CSS riche
         self.chat_browser = QTextBrowser()
         self.chat_browser.setObjectName("chatBrowser")
-        self.chat_browser.setOpenExternalLinks(True)
+        # On NE laisse PAS QTextBrowser naviguer en interne : un clic sur un lien
+        # file:///... était traité comme une ressource interne (setSource), ce qui
+        # polluait son historique et cassait le bouton retour. On intercepte donc
+        # tous les clics et on les ouvre dans l'application système adéquate.
+        self.chat_browser.setOpenLinks(False)
+        self.chat_browser.setOpenExternalLinks(False)
+        self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
         chat_layout.addWidget(self.chat_browser)
 
         self.splitter.addWidget(chat_container)
-
-        # Connecter l'historique de navigation au bouton retour
-        self.chat_browser.backwardAvailable.connect(self.btn_back.setVisible)
-        self.btn_back.clicked.connect(self.chat_browser.backward)
 
         # Raccourci clavier : Ctrl+F → ouvrir la find bar
         # Stocké en attribut d'instance pour éviter le garbage-collection Python
@@ -1085,7 +1110,9 @@ class AntigravityManagerWindow(QMainWindow):
         if dtype == "conv":
             c_info: ConversationInfo = data[1]
             if not self.selected_conv or self.selected_conv.conv_id != c_info.conv_id:
-                self.display_chat(c_info)
+                # Navigation au clavier : on ne pollue pas l'historique du bouton ←
+                # (seuls un clic explicite, un résultat de recherche ou un lien empilent).
+                self.display_chat(c_info, record_history=False)
 
     def _toggle_markdown_mode(self):
         """Bascule entre la vue riche HTML et le mode markdown source brut (<>)."""
@@ -1097,7 +1124,21 @@ class AntigravityManagerWindow(QMainWindow):
     # -----------------------------------------------------------------
     # Affichage du Chat avec Rendu HTML / CSS Riche & Mode Markdown
     # -----------------------------------------------------------------
-    def display_chat(self, info: ConversationInfo):
+    def display_chat(self, info: ConversationInfo, record_history: bool = True):
+        # Historique de navigation : on empile la conversation qui était affichée
+        # avant celle-ci, sauf quand l'appel vient de _navigate_back (dépilage),
+        # d'un simple re-render de la même conversation (toggle markdown, etc.),
+        # ou d'un survol au clavier (record_history=False).
+        if record_history and not self._nav_suppress_push:
+            if self.selected_conv and self.selected_conv.conv_id != info.conv_id:
+                self._nav_history.append(self.selected_conv)
+
+        # On quitte l'éventuel mode « aperçu de fichier ».
+        self._file_view_active = False
+        self._file_view_return_conv = None
+        self.btn_back.setToolTip("Revenir à la conversation précédente")
+        self.btn_back.setVisible(bool(self._nav_history))
+
         self.selected_conv = info
         title_text = info.title if info.title else "Conversation sans titre"
         self.chat_title.setText(title_text)
@@ -1261,10 +1302,18 @@ class AntigravityManagerWindow(QMainWindow):
                     border: 1px solid {pre_border};
                     border-radius: 6px;
                     padding: 10px;
-                    overflow-x: auto;
                     font-family: 'Consolas', 'Fira Code', monospace;
                     font-size: 12px;
                     color: {pre_col};
+                    /* Le moteur de QTextBrowser ne gère pas le scroll horizontal
+                       d'un bloc : sans wrap, une longue ligne (chemin, commande
+                       .bat/.ps1/.json) déborde de la fenêtre. On enroule. */
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                }}
+                pre code {{
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
                 }}
                 code {{
                     background-color: {code_bg};
@@ -1273,11 +1322,14 @@ class AntigravityManagerWindow(QMainWindow):
                     font-family: 'Consolas', monospace;
                     font-size: 12px;
                     color: {code_col};
+                    /* Idem pour le code inline : un long `chemin\\vers\\script.ps1`
+                       ne doit pas pousser toute la ligne hors du cadre. */
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
                 }}
                 a {{
                     color: {model_title_col};
-                    word-break: break-all;
-                    overflow-wrap: break-word;
+                    word-wrap: break-word;
                 }}
                 hr {{
                     border: 0;
@@ -1354,6 +1406,10 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_browser.setHtml("")
         self.find_bar.setVisible(False)
         self.find_result_label.setText("")
+        self._nav_history.clear()
+        self._file_view_active = False
+        self._file_view_return_conv = None
+        self.btn_back.setToolTip("Revenir à la conversation précédente")
         self.btn_back.setVisible(False)
 
     def _open_current_session_folder(self):
@@ -1366,13 +1422,236 @@ class AntigravityManagerWindow(QMainWindow):
             QMessageBox.information(self, "Dossier introuvable", "Le dossier de cette session n'a pas été trouvé sur le disque.")
 
     # -----------------------------------------------------------------
+    # Navigation : liens externes & bouton retour
+    # -----------------------------------------------------------------
+    # Extensions considérées comme du texte affichable dans la vue discussion.
+    _TEXT_FILE_SUFFIXES = {
+        ".py", ".bat", ".ps1", ".psm1", ".sh", ".json", ".jsonl", ".txt", ".md",
+        ".markdown", ".ini", ".cfg", ".conf", ".toml", ".yaml", ".yml", ".xml",
+        ".html", ".htm", ".css", ".js", ".ts", ".tsx", ".jsx", ".c", ".h", ".cpp",
+        ".hpp", ".cs", ".java", ".rb", ".go", ".rs", ".sql", ".log", ".env",
+        ".gitignore", ".dockerignore", ".spec", ".csv", ".tsv", ".properties",
+    }
+    _MAX_FILE_VIEW_BYTES = 512 * 1024  # 512 Ko : au-delà, on n'affiche pas
+
+    def _on_anchor_clicked(self, url: QUrl):
+        """Gère un clic sur un lien dans la vue discussion.
+
+        QTextBrowser ne doit jamais naviguer en interne (setOpenLinks(False)) :
+        les liens file:/// étaient sinon chargés comme des ressources internes,
+        polluant l'historique et cassant le bouton retour.
+
+        Règles :
+          - lien web / mailto -> ouverture dans l'application système.
+          - fichier texte local -> AFFICHAGE du contenu dans la vue discussion
+                                   (jamais d'exécution : ouvrir un .py / .bat /
+                                   .ps1 avec son application associée revient à
+                                   l'exécuter). Coloration syntaxique si Pygments.
+          - dossier local -> ouverture dans l'Explorateur.
+          - fichier binaire / trop gros / introuvable -> message en status bar.
+        """
+        if url.isEmpty():
+            return
+        scheme = url.scheme().lower()
+
+        if scheme in ("http", "https", "mailto"):
+            QDesktopServices.openUrl(url)
+            return
+
+        if url.isLocalFile() or scheme == "file":
+            local = Path(url.toLocalFile())
+            if local.is_dir():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(local)))
+                self.status_bar.showMessage(f"📂 Dossier ouvert : {local}", 4000)
+            else:
+                self._show_file_content(local)
+            return
+        # Tout autre schéma : ignoré volontairement (aucune navigation du browser).
+
+    def _show_file_content(self, path: Path) -> None:
+        """Affiche le contenu texte de `path` dans la vue discussion.
+
+        Le bouton ← (‹_navigate_back›) restaure ensuite la conversation courante.
+        Aucune exécution n'a lieu : on lit et on rend le fichier, point.
+        """
+        if not path.exists() or not path.is_file():
+            self.status_bar.showMessage(f"⚠️ Fichier introuvable : {path}", 5000)
+            return
+
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        if size > self._MAX_FILE_VIEW_BYTES:
+            self.status_bar.showMessage(
+                f"⚠️ Fichier trop volumineux pour l'aperçu ({size // 1024} Ko) : {path.name}",
+                6000,
+            )
+            return
+
+        suffix = path.suffix.lower()
+        looks_texty = suffix in self._TEXT_FILE_SUFFIXES or suffix == ""
+        try:
+            raw_bytes = path.read_bytes()
+        except OSError as exc:
+            self.status_bar.showMessage(f"⚠️ Lecture impossible : {exc}", 6000)
+            return
+
+        # Heuristique binaire : présence d'octets NUL.
+        if b"\x00" in raw_bytes or (not looks_texty and suffix):
+            self.status_bar.showMessage(
+                f"⚠️ Fichier binaire ou non textuel, aperçu indisponible : {path.name}",
+                6000,
+            )
+            return
+
+        text = raw_bytes.decode("utf-8", errors="replace")
+
+        # Mémorise la conversation à restaurer via le bouton ←.
+        self._file_view_return_conv = self.selected_conv
+        self._file_view_active = True
+
+        is_dark = get_active_theme() == "dark"
+        body_bg = "#18181b" if is_dark else "#ffffff"
+        body_col = "#e4e4e7" if is_dark else "#0f172a"
+        head_col = "#a78bfa" if is_dark else "#6d28d9"
+        meta_col = "#71717a" if is_dark else "#64748b"
+        border_col = "#27272a" if is_dark else "#e2e8f0"
+
+        code_html, extra_css = self._render_file_body(path, text, is_dark)
+
+        html = f"""<!DOCTYPE html><html><head><style>
+            body {{
+                background-color: {body_bg};
+                color: {body_col};
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 13px;
+                margin: 0;
+                padding: 12px 16px;
+            }}
+            .file-head {{
+                color: {head_col};
+                font-weight: bold;
+                font-size: 14px;
+                word-break: break-all;
+            }}
+            .file-meta {{
+                color: {meta_col};
+                font-size: 11px;
+                margin: 2px 0 10px 0;
+                border-bottom: 1px solid {border_col};
+                padding-bottom: 8px;
+                word-break: break-all;
+            }}
+            pre {{
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                font-family: 'Consolas', 'Fira Code', monospace;
+                font-size: 12px;
+                line-height: 1.45;
+                margin: 0;
+            }}
+            {extra_css}
+        </style></head><body>
+            <div class="file-head">📄 {path.name}</div>
+            <div class="file-meta">{path}  •  {size} octets</div>
+            {code_html}
+        </body></html>"""
+
+        self.chat_browser.setHtml(html)
+        self.chat_title.setText(f"📄 {path.name}")
+        self.chat_meta.setText(f"Aperçu fichier — {path}")
+        self.btn_back.setVisible(True)
+        self.btn_back.setToolTip("Revenir à la conversation")
+        # La find bar reste pertinente sur le contenu du fichier ; les autres
+        # boutons propres à la conversation n'ont pas de sens ici.
+        self.btn_toggle_raw.setVisible(False)
+        self.status_bar.showMessage(f"📄 Aperçu de {path.name}", 4000)
+
+    def _render_file_body(self, path: Path, text: str, is_dark: bool) -> tuple[str, str]:
+        """Retourne (html_du_contenu, css_additionnel).
+
+        Utilise Pygments si disponible pour la coloration syntaxique, sinon
+        repli sur un simple <pre> échappé.
+        """
+        if _pyg_highlight is not None:
+            try:
+                try:
+                    lexer = get_lexer_for_filename(path.name, text)
+                except _PygClassNotFound:
+                    lexer = TextLexer()
+                formatter = _PygHtmlFormatter(
+                    style="monokai" if is_dark else "default",
+                    nowrap=False,
+                    noclasses=True,
+                    prestyles="white-space: pre-wrap; word-wrap: break-word",
+                )
+                return _pyg_highlight(text, lexer, formatter), ""
+            except Exception:
+                pass  # repli ci-dessous
+
+        escaped = (
+            text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        return f"<pre>{escaped}</pre>", ""
+
+    def _navigate_back(self):
+        """Bouton ← : restaure la conversation.
+
+        Deux cas :
+          1. On regarde un fichier (‹_file_view_active›) -> on ré-affiche la
+             conversation d'où venait le clic, sans toucher à l'historique.
+          2. Sinon -> on dépile l'historique de navigation entre conversations.
+        """
+        if getattr(self, "_file_view_active", False):
+            self._file_view_active = False
+            conv = getattr(self, "_file_view_return_conv", None)
+            self._file_view_return_conv = None
+            self.btn_back.setToolTip("Revenir à la conversation précédente")
+            if conv is not None:
+                self._nav_suppress_push = True
+                try:
+                    self.display_chat(conv)
+                finally:
+                    self._nav_suppress_push = False
+                self._select_conv_in_tree(conv.conv_id)
+            else:
+                self._clear_chat()
+            self.btn_back.setVisible(bool(self._nav_history))
+            return
+
+        if not self._nav_history:
+            return
+        target = self._nav_history.pop()
+        self._nav_suppress_push = True
+        try:
+            self.display_chat(target)
+        finally:
+            self._nav_suppress_push = False
+        self.btn_back.setVisible(bool(self._nav_history))
+        # Sélectionne la conversation cible dans l'arbre si elle y figure.
+        self._select_conv_in_tree(target.conv_id)
+
+    def _select_conv_in_tree(self, conv_id: str):
+        """Positionne la sélection de l'arbre sur la conversation donnée (si présente)."""
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data[0] == "conv" and data[1].conv_id == conv_id:
+                self.tree.blockSignals(True)
+                self.tree.setCurrentItem(item)
+                self.tree.blockSignals(False)
+                return
+            it += 1
+
+    # -----------------------------------------------------------------
     # Recherche Globale (Sidebar)
     # -----------------------------------------------------------------
     def _on_search_text_changed(self, text: str):
         """Déclenche la recherche avec un debounce de 400ms."""
         self._search_timer.stop()
         if not text.strip():
-            self._last_search_query = ""
             self._populate_tree()
             projects_root, _, _, _, _ = get_paths()
             total_p = len(self.project_convs)
@@ -1388,7 +1667,6 @@ class AntigravityManagerWindow(QMainWindow):
         query = self.search_input.text().strip()
         if not query:
             return
-        self._last_search_query = query
         scope = self._get_search_scope()
         self.status_bar.showMessage(f"🔍 Recherche de « {query} » dans {len(scope)} conversation(s)…")
         QApplication.processEvents()

@@ -7,7 +7,7 @@
 
 ## Environnement & Dépendances
 - Environnement virtuel local : `.venv` (Python 3.10)
-- Fichier de dépendances : `requirements.txt` (`PyQt6>=6.6.0`, `pytest>=7.0.0`, `pyinstaller>=6.0.0`)
+- Fichier de dépendances : `requirements.txt` (`PyQt6>=6.6.0`, `pytest>=7.0.0`, `pyinstaller>=6.0.0`, `markdown>=3.6.0`, `pygments>=2.17.0`)
 - Installation : `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`
 
 ## Tests Unitaires & Assurance Qualité
@@ -31,7 +31,7 @@
 - Automatisation des tags : `.\scripts\release.ps1 [minor|major]`
 
 ## Spécificités Techniques
-- `VERSION` : fichier unique définissant la version officielle (`1.1`).
+- `VERSION` : fichier unique définissant la version officielle (`1.3`).
 - `config.py` : gère la persistance des chemins, du thème, de la version et du changelog structuré dans `config.json`.
 - `data_loader.py` :
   - Découverte multi-dossiers résiliente d'`agyhub_summaries_proto.pb`.
@@ -40,13 +40,14 @@
   - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
   - Extraction du workspace sécurisée : dé-échappement des sauts de ligne, exclusion des chemins internes (.gemini, brain, Temp), détection des `SearchPath` / `Cwd` et élimination des faux projets (`n`, `nLast`).
   - Rendu riche de fallback pour les sessions de sous-agents : affichage automatique des artéfacts markdown, des médias/images générés et du résumé des opérations techniques.
-- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.2) :
+- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.3) :
   - Barre de titre avec numéro de version lu dynamiquement depuis `VERSION` via `get_app_version()` (jamais hard-codé).
+  - **[v1.3] Aperçu du contenu des fichiers référencés** : `chat_browser` avec `setOpenLinks(False)` + `setOpenExternalLinks(False)`, tous les clics passent par `_on_anchor_clicked`. Un lien fichier local est LU et affiché dans la vue discussion via `_show_file_content` (jamais ouvert avec l'application associée → aucune exécution de `.py`/`.bat`/`.ps1`). Coloration syntaxique par **Pygments** (`_render_file_body`, style `monokai`/`default` selon thème, lexer déduit du nom de fichier, repli `<pre>` échappé). Garde-fous : refus au-delà de 512 Ko, détection binaire (octets NUL / extension non listée dans `_TEXT_FILE_SUFFIXES`), message discret en status bar si introuvable. Liens web/mailto → application système ; dossiers → Explorateur.
+  - **[v1.3] Bouton ← Retour** dans le header du chat : pile d'historique maison `_nav_history` (liste de `ConversationInfo`) — l'historique natif `QTextBrowser` était pollué par les clics de liens `file:///` (navigation interne via `setSource`). Depuis un aperçu de fichier (`_file_view_active`), `_navigate_back` restaure la conversation d'origine (`_file_view_return_conv`) ; sinon il dépile `_nav_history`. La navigation clavier ↑↓ n'empile pas (`display_chat(record_history=False)`), seuls un clic dans l'arbre / un résultat de recherche / un lien empilent.
+  - **[v1.3] Fix word-wrap dans la vue discussion** : `white-space: pre-wrap` + `word-wrap: break-word` sur `pre`, `pre code` et `code` inline (le moteur de `QTextBrowser` ne scrolle pas horizontalement un bloc → une commande `.bat`/`.ps1` longue débordait) ; `a` passe de `word-break: break-all` à `word-wrap: break-word`.
   - **[v1.2] Champ de recherche globale** au-dessus du filtre projet dans la sidebar : filtre projets et conversations en cherchant dans le contenu de toutes les discussions du périmètre actif. Debounce 400ms, affichage du nombre de résultats dans la status bar.
   - **[v1.2] Respect du filtre projet dans la recherche** : si un projet est sélectionné dans le combo, la recherche ne porte que sur ses conversations.
   - **[v1.2] Barre de recherche locale (Find Bar)** sous le header du chat : pré-remplie automatiquement depuis la recherche globale, navigation ▲/▼ avec wrap-around, raccourci `Ctrl+F` pour ouvrir, `Échap` pour fermer.
-  - **[v1.2] Bouton ← Retour** dans le header du chat : utilise l'historique natif `QTextBrowser.backward()`, visible seulement quand un historique existe.
-  - **[v1.2] Fix word-wrap des liens** `file:///` : ajout de `word-break: break-all` dans le CSS HTML embarqué pour éviter les débordements horizontaux.
   - Intégration de l'icône officielle de l'application (`assets/icon.png` / `assets/icon.ico`) dans la barre latérale, la barre de titre et la barre des tâches Windows via `SetCurrentProcessExplicitAppUserModelID`.
   - Boîte déroulante de filtre par projet en haut de la barre latérale : *Tous les projets*, *Sans projet (orphelines)*, ou *Projet individuel*.
   - Dépliage intelligent : dossiers repliés par défaut en vue globale (« Tous les projets »), dépliés automatiquement en vue filtrée.
@@ -59,5 +60,5 @@
   - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné.
   - Menus contextuels complets (déplacement / réassignation vers un autre projet, suppression en cascade, copie ID, ouverture dossier brain/projet).
 - `assets/` : icône officielle du gestionnaire (`icon.png` 1024x1024 transparent, `icon.ico` multi-résolution).
-- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (16 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`) et le fichier `VERSION`.
+- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (16 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`), le fichier `VERSION` et `--collect-submodules pygments` (lexers/styles chargés dynamiquement, sinon la coloration de l'aperçu de fichier serait muette dans l'exe).
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.

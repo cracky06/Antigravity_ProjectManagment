@@ -104,6 +104,10 @@ $PyInstallerArgs = @(
     "--icon", "assets/icon.ico",
     "--add-data", "assets;assets",
     "--add-data", "VERSION;.",
+    # Pygments charge ses lexers/styles par import dynamique : sans cette
+    # collecte, la coloration syntaxique de l'apercu de fichier serait muette
+    # dans l'executable.
+    "--collect-submodules", "pygments",
     "antigravity_manager.py"
 )
 
