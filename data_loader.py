@@ -649,3 +649,37 @@ def delete_project_cascade(project_name: str, convs_to_delete: list[str]) -> tup
         return False, "\n".join(errors)
     return True, "Suppression effectuée avec succès."
 
+
+def delete_conversation(conv_id: str) -> tuple[bool, str]:
+    """Supprime définitivement une conversation unique (brain + sqlite db) sur tous les dossiers .gemini."""
+    _, antigravity_root, _, _, _ = get_paths()
+    errors = []
+    gemini_parent = antigravity_root.parent
+
+    for sub in ("antigravity-ide", "antigravity", "antigravity-backup"):
+        b_dir = gemini_parent / sub / "brain" / conv_id
+        if b_dir.is_dir():
+            try:
+                shutil.rmtree(b_dir)
+            except Exception as e:
+                errors.append(f"Brain {sub}: {e}")
+
+        c_dir = gemini_parent / sub / "conversations"
+        if c_dir.is_dir():
+            for ext in ("", "-wal", "-shm"):
+                f = c_dir / f"{conv_id}.db{ext}"
+                if f.is_file():
+                    try:
+                        f.unlink()
+                    except Exception as e:
+                        errors.append(f"DB {sub}{ext}: {e}")
+
+    # Invalider le cache mémoire
+    if conv_id in _CHAT_CACHE:
+        del _CHAT_CACHE[conv_id]
+
+    if errors:
+        return False, "\n".join(errors)
+    return True, "Conversation supprimée avec succès."
+
+
