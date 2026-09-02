@@ -31,7 +31,7 @@
 - Automatisation des tags : `.\scripts\release.ps1 [minor|major]`
 
 ## Spécificités Techniques
-- `VERSION` : fichier unique définissant la version officielle (`1.0`).
+- `VERSION` : fichier unique définissant la version officielle (`1.1`).
 - `config.py` : gère la persistance des chemins, du thème, de la version et du changelog structuré dans `config.json`.
 - `data_loader.py` :
   - Découverte multi-dossiers résiliente d'`agyhub_summaries_proto.pb`.
@@ -40,8 +40,8 @@
   - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
   - Extraction du workspace sécurisée : dé-échappement des sauts de ligne, exclusion des chemins internes (.gemini, brain, Temp), détection des `SearchPath` / `Cwd` et élimination des faux projets (`n`, `nLast`).
   - Rendu riche de fallback pour les sessions de sous-agents : affichage automatique des artéfacts markdown, des médias/images générés et du résumé des opérations techniques.
-- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.0) :
-  - Barre de titre avec numéro de version officiel : `Antigravity Manager v1.0 — Project & Chat Management`.
+- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.1) :
+  - Barre de titre avec numéro de version officiel : `Antigravity Manager v1.1 — Project & Chat Management`.
   - Intégration de l'icône officielle de l'application (`assets/icon.png` / `assets/icon.ico`) dans la barre latérale, la barre de titre et la barre des tâches Windows via `SetCurrentProcessExplicitAppUserModelID`.
   - Boîte déroulante de filtre par projet en haut de la barre latérale : *Tous les projets*, *Sans projet (orphelines)*, ou *Projet individuel*.
   - Dépliage intelligent : dossiers repliés par défaut en vue globale (« Tous les projets »), dépliés automatiquement en vue filtrée.

@@ -106,7 +106,9 @@ def test_version_and_changelog(tmp_path, monkeypatch):
     # Données du changelog
     ch = get_changelog_data()
     assert isinstance(ch, dict)
+    assert "v1.1" in ch
     assert "v1.0" in ch
+    assert "✨ Nouvelles fonctionnalités (feat)" in ch["v1.1"]
     assert "✨ Nouvelles fonctionnalités (feat)" in ch["v1.0"]
 
 

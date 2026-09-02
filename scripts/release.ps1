@@ -69,9 +69,14 @@ else {
 }
 
 $NewVersion = "$NewMajor.$NewMinor"
-$TagName = "V$NewVersion"
+$TagName = "v$NewVersion"
 
 Write-Host "`nNouvelle version a creer : $TagName (Type: $Type)" -ForegroundColor Green
+
+# 3.1 Mise à jour du fichier VERSION
+$VersionFilePath = Join-Path $RootDir "VERSION"
+Set-Content -Path $VersionFilePath -Value $NewVersion -Encoding UTF8
+Write-Host "Fichier VERSION mis a jour : $NewVersion" -ForegroundColor Gray
 
 # 4. Création du tag Git
 $TagMessage = if ($Message) { "Release $TagName - $Message" } else { "Release $TagName" }

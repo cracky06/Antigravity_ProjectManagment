@@ -127,6 +127,16 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.1": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Intégration du parseur Markdown officiel avec prise en charge complète de la syntaxe (# titres, **gras**, listes, code)",
+                "Support des tableaux Markdown, citations et retours à la ligne automatiques",
+            ],
+            "🎨 Identité Visuelle & Ergonomie (ui)": [
+                "Mise en page typographique soignée avec bordures et contrastes adaptés aux thèmes clair et sombre",
+                "Mode <> Source pour inspecter le code source brut à tout moment",
+            ],
+        },
         "v1.0": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Migration complète de l'interface vers PyQt6 (zéro scintillement, dépliage natif C++ fluide)",
