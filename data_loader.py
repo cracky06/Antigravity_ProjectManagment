@@ -254,13 +254,21 @@ def workspace_to_project(workspace_path: str) -> str:
     """Mappe un chemin workspace vers le nom du sous-dossier projet."""
     if not workspace_path:
         return ""
-    ws = workspace_path.rstrip("\\/")
+    ws = _clean_path_string(workspace_path).rstrip("\\/")
     projects_root, _, _, _, _ = get_paths()
     dev = str(projects_root).replace("/", "\\")
     if ws.upper().startswith(dev.upper()):
         remainder = ws[len(dev) :].lstrip("\\/")
         if remainder:
             return remainder.split("\\")[0].split("/")[0]
+
+    # Gestion des chemins génériques avec segment dev/projets/projects
+    parts = Path(ws).parts
+    if len(parts) >= 2:
+        for i, p in enumerate(parts):
+            if p.lower() in ("dev", "projets", "projects", "codemaison", "antigravity") and i + 1 < len(parts):
+                return parts[i + 1]
+
     return Path(ws).name
 
 
