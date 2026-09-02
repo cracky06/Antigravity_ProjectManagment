@@ -204,6 +204,7 @@ class AntigravityManagerApp(ctk.CTk):
         self.all_convs: list[ConversationInfo] = []
         self.expanded_projects: set[str] = set()
         self.conv_widgets: dict[str, list[tuple[ctk.CTkFrame, ctk.CTkLabel]]] = {}
+        self.project_subframes: dict[str, tuple[ctk.CTkFrame, ctk.CTkLabel, ctk.CTkFrame]] = {}
         self.selected_conv: ConversationInfo | None = None
 
         self._build_ui()
@@ -471,6 +472,7 @@ class AntigravityManagerApp(ctk.CTk):
     # -------------------------------------------------------------
     def _render_tree(self):
         self.conv_widgets.clear()
+        self.project_subframes.clear()
         for w in self.tree_scroll.winfo_children():
             w.destroy()
 
@@ -513,6 +515,16 @@ class AntigravityManagerApp(ctk.CTk):
                 cnt_lbl = ctk.CTkLabel(p_frame, text=str(count), font=(FONT_FAMILY, 10, "bold"), text_color=FG_MUTED, anchor="e")
                 cnt_lbl.grid(row=0, column=2, padx=(0, 8), pady=2, sticky="e")
 
+            # Conteneur dédié pour les conversations de ce projet
+            sub_container = ctk.CTkFrame(self.tree_scroll, fg_color="transparent")
+            for c_info in convs:
+                self._create_conv_widget(c_info, indent=True, parent=sub_container)
+
+            if is_expanded:
+                sub_container.pack(fill="x", padx=0, pady=0)
+
+            self.project_subframes[proj_name] = (p_frame, icon_lbl, sub_container)
+
             # Actions Clic
             def make_toggle(pname=proj_name, c_cnt=count):
                 return lambda e: self._toggle_project_click(pname, c_cnt)
@@ -525,11 +537,6 @@ class AntigravityManagerApp(ctk.CTk):
                 w.bind("<Button-3>", make_rclick_proj())
                 w.bind("<Enter>", lambda e, f=p_frame: f.configure(fg_color=BG_HOVER))
                 w.bind("<Leave>", lambda e, f=p_frame: f.configure(fg_color="transparent"))
-
-            # Conversations imbriquées si déplié (et seulement si non vide)
-            if is_expanded:
-                for c_info in convs:
-                    self._create_conv_widget(c_info, indent=True)
 
         # Séparateur
         sep = ctk.CTkFrame(self.tree_scroll, fg_color=SEPARATOR_COLOR, height=1, corner_radius=0)
@@ -549,13 +556,16 @@ class AntigravityManagerApp(ctk.CTk):
         ).grid(row=0, column=0, sticky="w", padx=6)
 
         for c_info in self.all_convs[:40]:
-            self._create_conv_widget(c_info, indent=False)
+            self._create_conv_widget(c_info, indent=False, parent=self.tree_scroll)
 
-    def _create_conv_widget(self, c_info: ConversationInfo, indent: bool):
+    def _create_conv_widget(self, c_info: ConversationInfo, indent: bool, parent=None):
+        if parent is None:
+            parent = self.tree_scroll
+
         is_sel = bool(self.selected_conv and self.selected_conv.conv_id == c_info.conv_id)
         bg = BG_SELECTED if is_sel else "transparent"
 
-        c_frame = ctk.CTkFrame(self.tree_scroll, fg_color=bg, corner_radius=5, height=28)
+        c_frame = ctk.CTkFrame(parent, fg_color=bg, corner_radius=5, height=28)
         c_frame.pack(fill="x", padx=2, pady=1)
         c_frame.grid_columnconfigure(0, weight=1)
 
@@ -604,13 +614,19 @@ class AntigravityManagerApp(ctk.CTk):
             w.bind("<Leave>", make_leave())
 
     def _toggle_project_click(self, project_name: str, count: int):
-        if count == 0:
-            return  # Dossier vide : aucun espace vide créé
+        if count == 0 or project_name not in self.project_subframes:
+            return
+
+        p_frame, icon_lbl, sub_container = self.project_subframes[project_name]
+
         if project_name in self.expanded_projects:
             self.expanded_projects.remove(project_name)
+            sub_container.pack_forget()
+            icon_lbl.configure(text="▶ 📁")
         else:
             self.expanded_projects.add(project_name)
-        self._render_tree()
+            sub_container.pack(fill="x", padx=0, pady=0, after=p_frame)
+            icon_lbl.configure(text="▼ 📂")
 
     # -------------------------------------------------------------
     # Affichage instantané du Chat (Commence TOUT EN HAUT)
