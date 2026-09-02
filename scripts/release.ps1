@@ -74,8 +74,12 @@ $TagName = "v$NewVersion"
 Write-Host "`nNouvelle version a creer : $TagName (Type: $Type)" -ForegroundColor Green
 
 # 3.1 Mise à jour du fichier VERSION
+# On écrit en UTF-8 SANS BOM : Set-Content -Encoding UTF8 sous Windows PowerShell
+# ajoute un BOM, ce qui faisait apparaître VERSION comme modifié après chaque
+# release alors que le contenu ("1.3") était inchangé.
 $VersionFilePath = Join-Path $RootDir "VERSION"
-Set-Content -Path $VersionFilePath -Value $NewVersion -Encoding UTF8
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($VersionFilePath, "$NewVersion`n", $Utf8NoBom)
 Write-Host "Fichier VERSION mis a jour : $NewVersion" -ForegroundColor Gray
 
 # 4. Création du tag Git
