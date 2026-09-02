@@ -40,6 +40,7 @@
   - Extraction du workspace sécurisée : dé-échappement des sauts de ligne, exclusion des chemins internes (.gemini, brain, Temp), détection des `SearchPath` / `Cwd` et élimination des faux projets (`n`, `nLast`).
   - Rendu riche de fallback pour les sessions de sous-agents : affichage automatique des artéfacts markdown, des médias/images générés et du résumé des opérations techniques.
 - `antigravity_manager.py` : interface graphique moderne **PyQt6** :
+  - Intégration de l'icône officielle de l'application (`assets/icon.png` / `assets/icon.ico`) dans la barre latérale, la barre de titre et la barre des tâches Windows via `SetCurrentProcessExplicitAppUserModelID`.
   - Boîte déroulante de filtre par projet en haut de la barre latérale : *Tous les projets*, *Sans projet (orphelines)*, ou *Projet individuel*.
   - Badge de projet contextuel directement visible dans la liste des *Conversations Récentes* (`[📁 NomProjet]` ou `[⚠️ Sans projet]`).
   - Support complet des thèmes **Système (Par défaut)**, **Clair (Light)** et **Sombre (Dark)** (`LIGHT_QSS` et `DARK_QSS`).
@@ -47,5 +48,6 @@
   - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné pour les bulles de messages et extraits de code.
   - Redimensionnement fluide via `QSplitter`.
   - Menus contextuels complets (déplacement / réassignation vers un autre projet, suppression en cascade, copie ID, ouverture dossier brain/projet).
-- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires et le packaging PyInstaller.
+- `assets/` : icône officielle du gestionnaire (`icon.png` 1024x1024 transparent, `icon.ico` multi-résolution).
+- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`).
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.

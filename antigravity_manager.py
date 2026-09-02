@@ -413,6 +413,23 @@ class SettingsDialog(QDialog):
             self.on_save_callback()
 
 
+def _get_app_icon() -> QIcon:
+    """Retourne l'icône officielle de l'application depuis assets/."""
+    base_dirs = [
+        Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent,
+        Path(__file__).parent,
+    ]
+    if hasattr(sys, "_MEIPASS"):
+        base_dirs.insert(0, Path(getattr(sys, "_MEIPASS")))
+
+    for base in base_dirs:
+        for name in ("assets/icon.png", "assets/icon.ico", "icon.png", "icon.ico"):
+            p = base / name
+            if p.is_file():
+                return QIcon(str(p))
+    return QIcon()
+
+
 # =====================================================================
 # Application Principale Antigravity Manager (PyQt6)
 # =====================================================================
@@ -422,6 +439,10 @@ class AntigravityManagerWindow(QMainWindow):
         self.setWindowTitle("Antigravity Manager — Project & Chat Management (PyQt6)")
         self.resize(1260, 840)
         self.setMinimumSize(850, 520)
+
+        icon = _get_app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
 
         # Données
         self.project_convs: dict[str, list[ConversationInfo]] = {}
@@ -461,6 +482,13 @@ class AntigravityManagerWindow(QMainWindow):
 
         # Header Sidebar
         sb_header = QHBoxLayout()
+        app_icon = _get_app_icon()
+        if not app_icon.isNull():
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(app_icon.pixmap(24, 24))
+            icon_lbl.setFixedSize(24, 24)
+            sb_header.addWidget(icon_lbl)
+
         title_lbl = QLabel("Antigravity")
         title_lbl.setObjectName("appTitle")
         sb_header.addWidget(title_lbl)
@@ -1046,8 +1074,20 @@ class AntigravityManagerWindow(QMainWindow):
 # Point d'entrée de l'application
 # =====================================================================
 def main():
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Antigravity.ProjectManager.App")
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    app_icon = _get_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
+
     active_theme = get_active_theme()
     app.setStyleSheet(DARK_QSS if active_theme == "dark" else LIGHT_QSS)
 
