@@ -94,10 +94,12 @@ Antigravity_ProjectManagment/
 
 ## 📜 5. Règles Constitutionnelles & Bonnes Pratiques
 
-1. **Zéro Destruction** : Ne jamais supprimer de code existant sans instruction explicite. Commenter plutôt que détruire si nécessaire.
-2. **Isolation Python** : Toutes les dépendances doivent être installées dans `.venv`. Maintenir `requirements.txt` à jour.
-3. **Conventions PowerShell** :
+1. **Priorité au Dialogue & Validation Préalable (Strict)** : Dès que l'utilisateur pose une question, échange sur une idée ou demande un retour ("qu'en penses-tu ?", "tu comprends ce que je veux dire ?", etc.), TOUJOURS répondre textuellement d'abord, clarifier et expliquer l'approche, puis ATTENDRE son accord ou feu vert explicite ("Go", "OK") avant d'exécuter des modifications de code ou de lancer des compilations/releases.
+2. **Zéro Destruction** : Ne jamais supprimer de code existant sans instruction explicite. Commenter plutôt que détruire si nécessaire.
+3. **Mode Prudent** : Proposer d'abord un plan d'action en 3 points avant d'exécuter des refactorisations importantes (>50 lignes).
+4. **Isolation Python** : Toutes les dépendances doivent être installées dans `.venv`. Maintenir `requirements.txt` à jour.
+5. **Conventions PowerShell** :
    * Toujours inclure `[CmdletBinding()]`.
    * Respecter le formalisme `Verb-Noun` (ex: `Build-App.ps1`, `New-Release`).
    * Proscrire les alias dans les scripts (`dir` ➔ `Get-ChildItem`, etc.).
-4. **Typage Python** : Utiliser les *Type Hints* Python 3.10+ (`def func(param: str | None) -> Path:`) et `pathlib.Path`.
+6. **Typage Python** : Utiliser les *Type Hints* Python 3.10+ (`def func(param: str | None) -> Path:`) et `pathlib.Path`.
