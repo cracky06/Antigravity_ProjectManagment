@@ -618,7 +618,13 @@ class AntigravityManagerApp(ctk.CTk):
         messages = load_chat_messages(info.conv_id)
 
         if not messages:
-            self.chat_text.insert(tk.END, "\n\n\nAucun message trouvé dans l'historique de cette conversation.\n", "empty_tag")
+            self.chat_text.insert(
+                tk.END,
+                "\n\n\nℹ️ Aucun message textuel dans les journaux.\n\n"
+                "Cette session correspond probablement à une sous-tâche technique (subagent)\n"
+                "ou ses journaux ont été archivés.\n",
+                "empty_tag",
+            )
             self.chat_text.config(state=tk.DISABLED)
             self.chat_text.yview_moveto(0.0)
             return

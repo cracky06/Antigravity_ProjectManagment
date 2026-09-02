@@ -6,9 +6,24 @@ from pathlib import Path
 
 import sys
 
-# Chemins par défaut
-DEFAULT_PROJECTS_ROOT = r"D:\DEV"
-DEFAULT_ANTIGRAVITY_ROOT = os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity")
+# Détection dynamique des chemins par défaut
+def _detect_default_projects_root() -> str:
+    for candidate in [r"E:\Dev", r"D:\DEV", r"C:\DEV"]:
+        if Path(candidate).is_dir():
+            return candidate
+    return r"D:\DEV"
+
+
+def _detect_default_antigravity_root() -> str:
+    # Priorité à antigravity-ide (Antigravity 2.0 / version actuelle)
+    ide_path = Path(os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity-ide"))
+    if ide_path.is_dir():
+        return str(ide_path)
+    return os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity")
+
+
+DEFAULT_PROJECTS_ROOT = _detect_default_projects_root()
+DEFAULT_ANTIGRAVITY_ROOT = _detect_default_antigravity_root()
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):

@@ -251,17 +251,60 @@ def workspace_to_project(workspace_path: str) -> str:
     return Path(ws).name
 
 
+def _find_brain_path(conv_id: str) -> Path | None:
+    """Trouve le dossier brain de la conversation dans le répertoire configuré ou les répertoires frères."""
+    _, antigravity_root, brain_dir, _, _ = get_paths()
+    candidate = brain_dir / conv_id
+    if candidate.is_dir():
+        return candidate
+
+    # Recherche dans les autres répertoires .gemini (antigravity-ide, antigravity, antigravity-backup)
+    gemini_parent = antigravity_root.parent
+    for sibling in ("antigravity-ide", "antigravity", "antigravity-backup"):
+        sib_candidate = gemini_parent / sibling / "brain" / conv_id
+        if sib_candidate.is_dir():
+            return sib_candidate
+    return None
+
+
+def _find_transcript_file(conv_id: str) -> Path | None:
+    """Trouve le fichier transcript le plus complet disponible pour une conversation."""
+    _, antigravity_root, brain_dir, _, _ = get_paths()
+    dirs_to_check = [brain_dir / conv_id]
+    gemini_parent = antigravity_root.parent
+    for sibling in ("antigravity-ide", "antigravity", "antigravity-backup"):
+        alt = gemini_parent / sibling / "brain" / conv_id
+        if alt not in dirs_to_check:
+            dirs_to_check.append(alt)
+
+    for b_dir in dirs_to_check:
+        if not b_dir.is_dir():
+            continue
+        t_full = b_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
+        if t_full.is_file():
+            return t_full
+        t_compact = b_dir / ".system_generated" / "logs" / "transcript.jsonl"
+        if t_compact.is_file():
+            return t_compact
+    return None
+
+
 # -----------------------------------------------------------------
 # Date & Titre de repli depuis transcript
 # -----------------------------------------------------------------
 def get_transcript_info(conv_id: str):
     """Retourne (fallback_title, last_datetime)."""
-    _, _, brain_dir, _, _ = get_paths()
-    transcript = brain_dir / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
-    if not transcript.is_file():
-        transcript = brain_dir / conv_id / ".system_generated" / "logs" / "transcript_full.jsonl"
-    if not transcript.is_file():
-        return conv_id[:12], None
+    transcript = _find_transcript_file(conv_id)
+    if not transcript or not transcript.is_file():
+        brain_path = _find_brain_path(conv_id)
+        last_dt = None
+        if brain_path and brain_path.is_dir():
+            try:
+                mtime = brain_path.stat().st_mtime
+                last_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+            except Exception:
+                pass
+        return conv_id[:12], last_dt
 
     first_user_title = ""
     last_ts_str = None
@@ -454,59 +497,78 @@ def delete_project_cascade(project_name: str, convs_to_delete: list[str]) -> tup
 # -----------------------------------------------------------------
 def load_chat_messages(conv_id: str) -> list[dict]:
     """Extrait tous les messages du chat ordonnés pour l'affichage."""
-    _, _, brain_dir, _, _ = get_paths()
-    transcript = brain_dir / conv_id / ".system_generated" / "logs" / "transcript_full.jsonl"
-    if not transcript.is_file():
-        transcript = brain_dir / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
-    if not transcript.is_file():
-        return []
-
+    transcript = _find_transcript_file(conv_id)
     messages = []
 
-    try:
-        with transcript.open(encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-
-                stype = obj.get("type")
-                source = obj.get("source")
-                content = obj.get("content", "")
-                ts = obj.get("created_at", "")
-                time_display = ""
-                if ts:
+    if transcript and transcript.is_file():
+        try:
+            with transcript.open(encoding="utf-8") as fh:
+                for line in fh:
                     try:
-                        pdt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        time_display = pdt.strftime("%d/%m %H:%M")
+                        obj = json.loads(line)
                     except Exception:
-                        time_display = ts[:16]
+                        continue
 
-                # Message utilisateur
-                if stype == "USER_INPUT" and source == "USER_EXPLICIT":
-                    raw = content.strip()
-                    m = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", raw, re.DOTALL)
-                    text = m.group(1).strip() if m else raw
-                    text = re.sub(r"<[^>]+>", "", text).strip()
-                    if text and not text.startswith("The following is a summary"):
-                        messages.append({
-                            "role": "user",
-                            "text": text,
-                            "timestamp": time_display,
-                        })
+                    stype = obj.get("type")
+                    source = obj.get("source")
+                    content = obj.get("content", "")
+                    ts = obj.get("created_at", "")
+                    time_display = ""
+                    if ts:
+                        try:
+                            pdt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            time_display = pdt.strftime("%d/%m %H:%M")
+                        except Exception:
+                            time_display = ts[:16]
 
-                # Réponse visible du modèle
-                elif stype == "PLANNER_RESPONSE" and source == "MODEL":
-                    text = content.strip()
-                    if text:
-                        messages.append({
-                            "role": "model",
-                            "text": text,
-                            "timestamp": time_display,
-                        })
+                    # Message utilisateur
+                    if stype == "USER_INPUT" and source == "USER_EXPLICIT":
+                        raw = content.strip()
+                        m = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", raw, re.DOTALL)
+                        text = m.group(1).strip() if m else raw
+                        text = re.sub(r"<[^>]+>", "", text).strip()
+                        if text and not text.startswith("The following is a summary"):
+                            messages.append({
+                                "role": "user",
+                                "text": text,
+                                "timestamp": time_display,
+                            })
 
-    except Exception:
-        pass
+                    # Réponse visible du modèle
+                    elif stype == "PLANNER_RESPONSE" and source == "MODEL":
+                        text = content.strip()
+                        if text:
+                            messages.append({
+                                "role": "model",
+                                "text": text,
+                                "timestamp": time_display,
+                            })
+
+        except Exception:
+            pass
+
+    # Si aucun message de log mais des artéfacts sont présents sur disque
+    if not messages:
+        brain_path = _find_brain_path(conv_id)
+        if brain_path and brain_path.is_dir():
+            for doc_name, label in [
+                ("walkthrough.md", "📝 Walkthrough & Synthèse"),
+                ("implementation_plan.md", "📋 Plan d'implémentation"),
+                ("task.md", "📌 Tâche"),
+            ]:
+                doc_file = brain_path / doc_name
+                if doc_file.is_file():
+                    try:
+                        doc_content = doc_file.read_text(encoding="utf-8", errors="ignore").strip()
+                        if doc_content:
+                            display_doc = doc_content[:4000] + ("\n\n[...suite tronquée...]" if len(doc_content) > 4000 else "")
+                            messages.append({
+                                "role": "model",
+                                "text": f"### {label} (extrait de session)\n\n{display_doc}",
+                                "timestamp": "",
+                            })
+                            break
+                    except Exception:
+                        pass
 
     return messages
