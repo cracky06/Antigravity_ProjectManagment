@@ -37,9 +37,11 @@
   - Fonction `move_conversation(conv_id, target_project)` : réassignation officielle avec ré-encodage binaire protobuf wire-format pour compatibilité totale avec Google Antigravity IDE.
   - Priorisation du format compact `transcript.jsonl` et pré-filtrage des lignes `USER_INPUT`/`PLANNER_RESPONSE` pour une lecture ultra-rapide.
   - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
-  - Extraction du workspace depuis les transcripts si absent du proto (`Active Document:` / URIs).
-  - Filtrage des stubs de sous-agents orphelins et fallback sur les artéfacts markdown (`walkthrough.md`, `task.md`, `implementation_plan.md`).
+  - Extraction du workspace sécurisée : dé-échappement des sauts de ligne, exclusion des chemins internes (.gemini, brain, Temp), détection des `SearchPath` / `Cwd` et élimination des faux projets (`n`, `nLast`).
+  - Rendu riche de fallback pour les sessions de sous-agents : affichage automatique des artéfacts markdown, des médias/images générés et du résumé des opérations techniques.
 - `antigravity_manager.py` : interface graphique moderne **PyQt6** :
+  - Boîte déroulante de filtre par projet en haut de la barre latérale : *Tous les projets*, *Sans projet (orphelines)*, ou *Projet individuel*.
+  - Badge de projet contextuel directement visible dans la liste des *Conversations Récentes* (`[📁 NomProjet]` ou `[⚠️ Sans projet]`).
   - Support complet des thèmes **Système (Par défaut)**, **Clair (Light)** et **Sombre (Dark)** (`LIGHT_QSS` et `DARK_QSS`).
   - Arborescence native `QTreeWidget` (dépliage/repliage natif C++ à 60 FPS, zéro freeze, zéro clignotement).
   - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné pour les bulles de messages et extraits de code.

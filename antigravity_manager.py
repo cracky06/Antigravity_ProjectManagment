@@ -480,6 +480,18 @@ class AntigravityManagerWindow(QMainWindow):
 
         sidebar_layout.addLayout(sb_header)
 
+        # Filtre par projet
+        self.project_filter_combo = QComboBox()
+        self.project_filter_combo.setObjectName("projectFilterCombo")
+        is_dark = get_active_theme() == "dark"
+        self.project_filter_combo.setStyleSheet(
+            "padding: 5px 8px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 6px; color: #f4f4f5; font-size: 12px;"
+            if is_dark
+            else "padding: 5px 8px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; color: #0f172a; font-size: 12px;"
+        )
+        self.project_filter_combo.currentIndexChanged.connect(self._on_filter_changed)
+        sidebar_layout.addWidget(self.project_filter_combo)
+
         # Tree Widget natif accéléré matériellement
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
@@ -546,6 +558,9 @@ class AntigravityManagerWindow(QMainWindow):
     # -----------------------------------------------------------------
     # Chargement & Rendu des Données
     # -----------------------------------------------------------------
+    def _on_filter_changed(self):
+        self._populate_tree()
+
     def reload_data(self):
         self._apply_theme()
         projects_root, _, _, _, _ = get_paths()
@@ -553,6 +568,34 @@ class AntigravityManagerWindow(QMainWindow):
         QApplication.processEvents()
 
         self.project_convs, self.all_convs = build_project_map()
+
+        # Mettre à jour la boîte de filtre par projet
+        if hasattr(self, "project_filter_combo"):
+            self.project_filter_combo.blockSignals(True)
+            cur_data = self.project_filter_combo.currentData()
+            self.project_filter_combo.clear()
+
+            total_c = len(self.all_convs)
+            no_proj = [c for c in self.all_convs if not c.project]
+            
+            self.project_filter_combo.addItem(f"📁 Tous les projets ({len(self.project_convs)} projs, {total_c} convs)", "ALL")
+            if no_proj:
+                self.project_filter_combo.addItem(f"⚠️ Sans projet ({len(no_proj)})", "NONE")
+
+            for p_name in sorted(self.project_convs.keys(), key=str.lower):
+                c_count = len(self.project_convs[p_name])
+                self.project_filter_combo.addItem(f"📁 {p_name} ({c_count})", p_name)
+
+            # Restaurer sélection précédente si disponible
+            idx = 0
+            if cur_data:
+                for i in range(self.project_filter_combo.count()):
+                    if self.project_filter_combo.itemData(i) == cur_data:
+                        idx = i
+                        break
+            self.project_filter_combo.setCurrentIndex(idx)
+            self.project_filter_combo.blockSignals(False)
+
         self._populate_tree()
 
         if self.selected_conv:
@@ -579,6 +622,63 @@ class AntigravityManagerWindow(QMainWindow):
         active_color = QColor("#f4f4f5" if is_dark else "#0f172a")
         empty_color = QColor("#71717a" if is_dark else "#94a3b8")
 
+        filter_val = "ALL"
+        if hasattr(self, "project_filter_combo") and self.project_filter_combo.count() > 0:
+            filter_val = self.project_filter_combo.currentData() or "ALL"
+
+        # CAS 1 : Filtre "Sans projet" uniquement
+        if filter_val == "NONE":
+            no_proj_convs = [c for c in self.all_convs if not c.project]
+            header_item = QTreeWidgetItem([f"DISCUSSIONS SANS PROJET ({len(no_proj_convs)})"])
+            header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            header_item.setForeground(0, header_color)
+            f = header_item.font(0)
+            f.setBold(True)
+            header_item.setFont(0, f)
+            self.tree.addTopLevelItem(header_item)
+
+            for c_info in no_proj_convs:
+                display_title = c_info.title if c_info.title else c_info.conv_id[:12]
+                if len(display_title) > 36:
+                    display_title = display_title[:34] + "…"
+                time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
+                c_item = QTreeWidgetItem([f"💬  {display_title}  •  [⚠️ Sans projet]{time_suffix}"])
+                c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+                self.tree.addTopLevelItem(c_item)
+
+            header_item.setExpanded(True)
+            return
+
+        # CAS 2 : Projet unique sélectionné
+        if filter_val != "ALL" and filter_val in self.project_convs:
+            convs = self.project_convs[filter_val]
+            proj_header_item = QTreeWidgetItem([f"PROJET : {filter_val} ({len(convs)} convs)"])
+            proj_header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            proj_header_item.setForeground(0, header_color)
+            f = proj_header_item.font(0)
+            f.setBold(True)
+            proj_header_item.setFont(0, f)
+            self.tree.addTopLevelItem(proj_header_item)
+
+            p_item = QTreeWidgetItem([f"📁  {filter_val}  ({len(convs)})"])
+            p_item.setData(0, Qt.ItemDataRole.UserRole, ("project", filter_val, convs))
+            p_item.setForeground(0, active_color if convs else empty_color)
+
+            for c_info in convs:
+                display_title = c_info.title if c_info.title else c_info.conv_id[:12]
+                if len(display_title) > 38:
+                    display_title = display_title[:36] + "…"
+                time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
+                c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
+                c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+                p_item.addChild(c_item)
+
+            p_item.setExpanded(True)
+            self.tree.addTopLevelItem(p_item)
+            proj_header_item.setExpanded(True)
+            return
+
+        # CAS 3 : "ALL" — Tous les projets + Toutes les conversations récentes
         # Section 1 : Projets
         proj_header_item = QTreeWidgetItem(["PROJETS"])
         proj_header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -615,7 +715,7 @@ class AntigravityManagerWindow(QMainWindow):
 
             self.tree.addTopLevelItem(p_item)
 
-        # Section 2 : Conversations Récentes
+        # Section 2 : Conversations Récentes avec badge de projet
         conv_header_item = QTreeWidgetItem(["CONVERSATIONS RÉCENTES"])
         conv_header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
         conv_header_item.setForeground(0, header_color)
@@ -626,10 +726,11 @@ class AntigravityManagerWindow(QMainWindow):
 
         for c_info in self.all_convs[:40]:
             display_title = c_info.title if c_info.title else c_info.conv_id[:12]
-            if len(display_title) > 38:
-                display_title = display_title[:36] + "…"
+            if len(display_title) > 30:
+                display_title = display_title[:28] + "…"
+            p_badge = f"  •  [{c_info.project}]" if c_info.project else "  •  [⚠️ Sans projet]"
             time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
-            c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
+            c_item = QTreeWidgetItem([f"💬  {display_title}{p_badge}{time_suffix}"])
             c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
             self.tree.addTopLevelItem(c_item)
 

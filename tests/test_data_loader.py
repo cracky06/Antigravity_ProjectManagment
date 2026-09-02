@@ -33,6 +33,10 @@ def test_workspace_to_project():
     assert workspace_to_project(r"E:\Dev\MonProjet\SousDossier") == "MonProjet"
     assert workspace_to_project(r"D:\DEV\ProjetAlpha") == "ProjetAlpha"
     assert workspace_to_project(r"file:///E:/Dev/ProjetBeta") == "ProjetBeta"
+    assert workspace_to_project(r"E:\Dev\Naturalchimie2\components\GameBoard.tsx`") == "Naturalchimie2"
+    assert workspace_to_project(r"c:\Users\Manu\OneDrive\Private\scripts\Simpsons_Zombie_Apocalypse") == "Simpsons_Zombie_Apocalypse"
+    assert workspace_to_project("n") == ""
+    assert workspace_to_project("nLast") == ""
     assert workspace_to_project("") == ""
 
 

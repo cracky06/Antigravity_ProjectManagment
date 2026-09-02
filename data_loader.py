@@ -279,22 +279,32 @@ def workspace_to_project(workspace_path: str) -> str:
     """Mappe un chemin workspace vers le nom du sous-dossier projet."""
     if not workspace_path:
         return ""
-    ws = _clean_path_string(workspace_path).rstrip("\\/")
+    ws = _clean_path_string(workspace_path).rstrip("\\/`'\",.:; ").strip()
+    if not ws:
+        return ""
+
     projects_root, _, _, _, _ = get_paths()
     dev = str(projects_root).replace("/", "\\")
     if ws.upper().startswith(dev.upper()):
         remainder = ws[len(dev) :].lstrip("\\/")
         if remainder:
-            return remainder.split("\\")[0].split("/")[0]
+            candidate = remainder.split("\\")[0].split("/")[0].strip()
+            if candidate and candidate.lower() not in ("n", "nlast", "temp", "tmp", "logs", "cache"):
+                return candidate
 
-    # Gestion des chemins génériques avec segment dev/projets/projects
+    # Gestion des chemins génériques avec segments reconnus
     parts = Path(ws).parts
     if len(parts) >= 2:
         for i, p in enumerate(parts):
-            if p.lower() in ("dev", "projets", "projects", "codemaison", "antigravity") and i + 1 < len(parts):
-                return parts[i + 1]
+            if p.lower() in ("dev", "projets", "projects", "codemaison", "antigravity", "scripts") and i + 1 < len(parts):
+                cand = parts[i + 1].strip().rstrip("`'\",.:; ")
+                if cand and cand.lower() not in ("n", "nlast", "temp", "tmp", "logs", "cache"):
+                    return cand
 
-    return Path(ws).name
+    name = Path(ws).name.strip().rstrip("`'\",.:; ")
+    if name and name.lower() not in ("n", "nlast", "temp", "tmp", "logs", "cache"):
+        return name
+    return ""
 
 
 def _find_brain_path(conv_id: str) -> Path | None:
@@ -437,6 +447,45 @@ def load_chat_messages(conv_id: str) -> list[dict]:
                     except Exception:
                         pass
 
+            if not messages:
+                # Vérifier présence d'images générées dans le brain
+                try:
+                    images = [f.name for f in brain_path.iterdir() if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".svg")]
+                    if images:
+                        img_list = "\n".join([f"- 🖼️ `{img}`" for img in images[:10]])
+                        messages.append({
+                            "role": "model",
+                            "text": f"### 🎨 Médias générés dans cette tâche\n\nCette session a produit les artéfacts visuels suivants :\n\n{img_list}",
+                            "timestamp": "",
+                        })
+                except Exception:
+                    pass
+
+            if not messages:
+                transcript = _find_transcript_file(conv_id)
+                if transcript and transcript.is_file():
+                    actions = []
+                    try:
+                        with transcript.open(encoding="utf-8", errors="ignore") as fh:
+                            for line in fh:
+                                for m_act in re.finditer(r'"(?:toolAction|toolSummary)"\s*:\s*"([^"\\]+)"', line):
+                                    act_text = m_act.group(1).strip()
+                                    if act_text and act_text not in actions:
+                                        actions.append(act_text)
+                                    if len(actions) >= 12:
+                                        break
+                                if len(actions) >= 12:
+                                    break
+                        if actions:
+                            action_list = "\n".join([f"- ⚙️ {a}" for a in actions])
+                            messages.append({
+                                "role": "model",
+                                "text": f"### 🛠️ Opérations techniques du sous-agent\n\nCette session automatisée a exécuté les opérations suivantes :\n\n{action_list}",
+                                "timestamp": "",
+                            })
+                    except Exception:
+                        pass
+
     return messages
 
 
@@ -530,19 +579,40 @@ def _extract_workspace_from_transcript(conv_id: str) -> str:
         return ""
     try:
         with transcript.open(encoding="utf-8", errors="ignore") as fh:
-            for line in fh:
-                m = re.search(r"Active Document:\s*([a-zA-Z]:\\[^\r\n\t]+)", line)
+            for raw_line in fh:
+                # Dé-échapper les sauts de ligne de chaînes JSON pour éviter les captures corrompues
+                line = raw_line.replace("\\r", " ").replace("\\n", " ")
+
+                # 1. Active Document (ignorer les fichiers internes .gemini/brain/Temp)
+                m = re.search(r"Active Document:\s*([a-zA-Z]:\\[^\s\(\)\"\'<>]+)", line)
                 if m:
                     doc_path = Path(m.group(1).strip())
-                    if len(doc_path.parts) >= 3:
-                        return str(doc_path.parent)
-                m2 = re.search(r"\[URI\]\s*->\s*\[CorpusName\]:\s*\n?\s*([^\s\n\r]+)", line)
+                    parts_lower = [p.lower() for p in doc_path.parts]
+                    if not any(k in parts_lower for k in (".gemini", "antigravity", "antigravity-ide", "temp", "tmp")):
+                        if len(doc_path.parts) >= 3:
+                            return str(doc_path.parent)
+
+                # 2. [URI] -> [CorpusName]
+                m2 = re.search(r"\[URI\]\s*->\s*\[CorpusName\]:\s*([^\s\"\'<>]+)", line)
                 if m2:
-                    return _clean_path_string(m2.group(1))
+                    val = _clean_path_string(m2.group(1)).rstrip("`'\",.:; ")
+                    if val and not any(k in val.lower() for k in (".gemini", "temp", "tmp")):
+                        return val
+
+                # 3. SearchPath ou Cwd dans les tool_calls
+                m_sp = re.search(r'"(?:SearchPath|Cwd)"\s*:\s*"([a-zA-Z]:(?:\\\\|/)[^"\\r\\n]+)"', line)
+                if m_sp:
+                    val = _clean_path_string(m_sp.group(1).replace("\\\\", "\\")).rstrip("`'\",.:; ")
+                    if val and not any(k in val.lower() for k in (".gemini", "temp", "tmp")):
+                        return val
+
+                # 4. file:///
                 if "file:///" in line:
-                    m3 = re.search(r"file:///([^\s\n\r\>\)\"]+)", line)
+                    m3 = re.search(r"file:///([a-zA-Z]:/[^\s\>\)\"]+)", line)
                     if m3:
-                        return _clean_path_string(m3.group(0))
+                        val = _clean_path_string(m3.group(0)).rstrip("`'\",.:; ")
+                        if val and not any(k in val.lower() for k in (".gemini", "temp", "tmp")):
+                            return val
     except Exception:
         pass
     return ""
