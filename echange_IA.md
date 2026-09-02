@@ -31,7 +31,7 @@
 - Automatisation des tags : `.\scripts\release.ps1 [minor|major]`
 
 ## Spécificités Techniques
-- `config.py` : gère la persistance des chemins dans `config.json` (auto-détection dynamique `antigravity-ide` et racine projet, compatible `sys.frozen`).
+- `config.py` : gère la persistance des chemins et du thème dans `config.json` (auto-détection dynamique `antigravity-ide`, racine projet, et détection du thème OS Windows via registre `AppsUseLightTheme`, compatible `sys.frozen`).
 - `data_loader.py` :
   - Découverte multi-dossiers résiliente d'`agyhub_summaries_proto.pb`.
   - Fonction `move_conversation(conv_id, target_project)` : réassignation officielle avec ré-encodage binaire protobuf wire-format pour compatibilité totale avec Google Antigravity IDE.
@@ -40,8 +40,9 @@
   - Extraction du workspace depuis les transcripts si absent du proto (`Active Document:` / URIs).
   - Filtrage des stubs de sous-agents orphelins et fallback sur les artéfacts markdown (`walkthrough.md`, `task.md`, `implementation_plan.md`).
 - `antigravity_manager.py` : interface graphique moderne **PyQt6** :
+  - Support complet des thèmes **Système (Par défaut)**, **Clair (Light)** et **Sombre (Dark)** (`LIGHT_QSS` et `DARK_QSS`).
   - Arborescence native `QTreeWidget` (dépliage/repliage natif C++ à 60 FPS, zéro freeze, zéro clignotement).
-  - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS pour les bulles de messages et extraits de code.
+  - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné pour les bulles de messages et extraits de code.
   - Redimensionnement fluide via `QSplitter`.
   - Menus contextuels complets (déplacement / réassignation vers un autre projet, suppression en cascade, copie ID, ouverture dossier brain/projet).
 - `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires et le packaging PyInstaller.

@@ -38,7 +38,7 @@ def load_config() -> dict:
     config = {
         "projects_root": DEFAULT_PROJECTS_ROOT,
         "antigravity_root": DEFAULT_ANTIGRAVITY_ROOT,
-        "theme": "light",
+        "theme": "system",
     }
     if CONFIG_FILE.is_file():
         try:
@@ -67,3 +67,30 @@ def get_projects_root() -> Path:
 def get_antigravity_root() -> Path:
     cfg = load_config()
     return Path(cfg.get("antigravity_root", DEFAULT_ANTIGRAVITY_ROOT))
+
+
+def detect_system_theme() -> str:
+    """Détecte le thème du système d'exploitation Windows ('dark' ou 'light')."""
+    if sys.platform == "win32":
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            )
+            val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            winreg.CloseKey(key)
+            return "light" if val == 1 else "dark"
+        except Exception:
+            pass
+    return "dark"
+
+
+def get_active_theme() -> str:
+    """Retourne le thème effectif à appliquer ('dark' ou 'light')."""
+    cfg = load_config()
+    theme_choice = cfg.get("theme", "system").lower()
+    if theme_choice in ("dark", "light"):
+        return theme_choice
+    return detect_system_theme()
+

@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QDialog,
     QLineEdit,
+    QComboBox,
     QFileDialog,
     QMessageBox,
     QMenu,
@@ -40,6 +41,7 @@ from config import (
     save_config,
     get_projects_root,
     get_antigravity_root,
+    get_active_theme,
     DEFAULT_PROJECTS_ROOT,
     DEFAULT_ANTIGRAVITY_ROOT,
 )
@@ -55,7 +57,7 @@ from data_loader import (
 )
 
 # =====================================================================
-# STYLES CSS / QSS (Thème Moderne Antigravity)
+# STYLES CSS / QSS (Thèmes Clair & Sombre Antigravity)
 # =====================================================================
 DARK_QSS = """
 QMainWindow, QDialog {
@@ -179,6 +181,128 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 }
 """
 
+LIGHT_QSS = """
+QMainWindow, QDialog {
+    background-color: #f8fafc;
+    color: #0f172a;
+    font-family: 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+QSplitter::handle {
+    background-color: #e2e8f0;
+    width: 2px;
+}
+
+/* Sidebar */
+QFrame#sidebarFrame {
+    background-color: #f1f5f9;
+    border-right: 1px solid #e2e8f0;
+}
+
+QLabel#appTitle {
+    font-size: 15px;
+    font-weight: bold;
+    color: #0f172a;
+}
+
+QPushButton.toolBtn {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #475569;
+    font-size: 13px;
+    padding: 4px 8px;
+}
+QPushButton.toolBtn:hover {
+    background-color: #f8fafc;
+    color: #0f172a;
+    border-color: #94a3b8;
+}
+
+/* TreeWidget */
+QTreeWidget {
+    background-color: transparent;
+    border: none;
+    color: #1e293b;
+    font-size: 12px;
+    outline: none;
+}
+QTreeWidget::item {
+    padding: 5px 4px;
+    border-radius: 5px;
+    margin: 1px 4px;
+}
+QTreeWidget::item:hover {
+    background-color: #e2e8f0;
+    color: #0f172a;
+}
+QTreeWidget::item:selected {
+    background-color: #dbeafe;
+    color: #1d4ed8;
+    font-weight: 600;
+}
+QTreeWidget::branch:has-children:!has-siblings:closed,
+QTreeWidget::branch:closed:has-children:has-siblings {
+    image: none;
+}
+QTreeWidget::branch:open:has-children:!has-siblings,
+QTreeWidget::branch:open:has-children:has-siblings {
+    image: none;
+}
+
+/* Chat Viewer */
+QFrame#chatHeader {
+    background-color: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 10px 16px;
+}
+QLabel#chatTitle {
+    font-size: 16px;
+    font-weight: bold;
+    color: #0f172a;
+}
+QLabel#chatMeta {
+    font-size: 11px;
+    color: #64748b;
+}
+
+QTextBrowser#chatBrowser {
+    background-color: #ffffff;
+    border: none;
+    padding: 16px;
+    color: #0f172a;
+    selection-background-color: #bfdbfe;
+    selection-color: #1e3a8a;
+}
+
+/* Status Bar */
+QStatusBar {
+    background-color: #f1f5f9;
+    border-top: 1px solid #e2e8f0;
+    color: #64748b;
+    font-size: 11px;
+    padding: 4px 10px;
+}
+
+/* Scrollbars */
+QScrollBar:vertical {
+    background: #f8fafc;
+    width: 8px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: #cbd5e1;
+    min-height: 20px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #94a3b8;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+"""
+
 
 # =====================================================================
 # Boîte de Dialogue des Paramètres (PyQt6)
@@ -187,9 +311,16 @@ class SettingsDialog(QDialog):
     def __init__(self, parent: QMainWindow | None = None, on_save_callback=None):
         super().__init__(parent)
         self.on_save_callback = on_save_callback
-        self.setWindowTitle("Paramètres — Dossiers sources")
-        self.setFixedSize(560, 260)
+        self.setWindowTitle("Paramètres — Dossiers sources & Thème")
+        self.setFixedSize(560, 320)
         self.setModal(True)
+
+        is_dark = get_active_theme() == "dark"
+        input_style = (
+            "padding: 6px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 5px; color: #fff;"
+            if is_dark
+            else "padding: 6px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; color: #0f172a;"
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -199,7 +330,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(QLabel("Répertoire racine des projets (ex: E:\\Dev) :"))
         p_row = QHBoxLayout()
         self.proj_edit = QLineEdit(str(get_projects_root()))
-        self.proj_edit.setStyleSheet("padding: 6px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 5px; color: #fff;")
+        self.proj_edit.setStyleSheet(input_style)
         p_row.addWidget(self.proj_edit)
         btn_browse_p = QPushButton("Parcourir…")
         btn_browse_p.clicked.connect(self._browse_proj)
@@ -210,12 +341,30 @@ class SettingsDialog(QDialog):
         layout.addWidget(QLabel("Dossier Antigravity IDE (ex: %USERPROFILE%\\.gemini\\antigravity-ide) :"))
         ag_row = QHBoxLayout()
         self.ag_edit = QLineEdit(str(get_antigravity_root()))
-        self.ag_edit.setStyleSheet("padding: 6px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 5px; color: #fff;")
+        self.ag_edit.setStyleSheet(input_style)
         ag_row.addWidget(self.ag_edit)
         btn_browse_ag = QPushButton("Parcourir…")
         btn_browse_ag.clicked.connect(self._browse_ag)
         ag_row.addWidget(btn_browse_ag)
         layout.addLayout(ag_row)
+
+        # 3. Thème de l'interface
+        layout.addWidget(QLabel("Thème de l'application :"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Système (Par défaut)", "system")
+        self.theme_combo.addItem("Clair (Light)", "light")
+        self.theme_combo.addItem("Sombre (Dark)", "dark")
+        self.theme_combo.setStyleSheet(input_style)
+
+        current_theme = load_config().get("theme", "system").lower()
+        if current_theme == "light":
+            self.theme_combo.setCurrentIndex(1)
+        elif current_theme == "dark":
+            self.theme_combo.setCurrentIndex(2)
+        else:
+            self.theme_combo.setCurrentIndex(0)
+
+        layout.addWidget(self.theme_combo)
 
         layout.addSpacing(10)
 
@@ -251,11 +400,13 @@ class SettingsDialog(QDialog):
     def _reset_defaults(self):
         self.proj_edit.setText(str(DEFAULT_PROJECTS_ROOT))
         self.ag_edit.setText(str(DEFAULT_ANTIGRAVITY_ROOT))
+        self.theme_combo.setCurrentIndex(0)
 
     def _save(self):
         cfg = load_config()
         cfg["projects_root"] = self.proj_edit.text().strip()
         cfg["antigravity_root"] = self.ag_edit.text().strip()
+        cfg["theme"] = self.theme_combo.currentData()
         save_config(cfg)
         self.accept()
         if self.on_save_callback:
@@ -277,8 +428,15 @@ class AntigravityManagerWindow(QMainWindow):
         self.all_convs: list[ConversationInfo] = []
         self.selected_conv: ConversationInfo | None = None
 
+        self._apply_theme()
         self._build_ui()
         self.reload_data()
+
+    def _apply_theme(self):
+        app = QApplication.instance()
+        if app:
+            theme = get_active_theme()
+            app.setStyleSheet(DARK_QSS if theme == "dark" else LIGHT_QSS)
 
     def _build_ui(self):
         # Widget central + Layout principal
@@ -389,6 +547,7 @@ class AntigravityManagerWindow(QMainWindow):
     # Chargement & Rendu des Données
     # -----------------------------------------------------------------
     def reload_data(self):
+        self._apply_theme()
         projects_root, _, _, _, _ = get_paths()
         self.status_bar.showMessage("Chargement des données Antigravity…")
         QApplication.processEvents()
@@ -415,11 +574,15 @@ class AntigravityManagerWindow(QMainWindow):
 
     def _populate_tree(self):
         self.tree.clear()
+        is_dark = get_active_theme() == "dark"
+        header_color = QColor("#a1a1aa" if is_dark else "#64748b")
+        active_color = QColor("#f4f4f5" if is_dark else "#0f172a")
+        empty_color = QColor("#71717a" if is_dark else "#94a3b8")
 
         # Section 1 : Projets
         proj_header_item = QTreeWidgetItem(["PROJETS"])
         proj_header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-        proj_header_item.setForeground(0, QColor("#a1a1aa"))
+        proj_header_item.setForeground(0, header_color)
         f = proj_header_item.font(0)
         f.setBold(True)
         proj_header_item.setFont(0, f)
@@ -434,7 +597,7 @@ class AntigravityManagerWindow(QMainWindow):
             p_item.setData(0, Qt.ItemDataRole.UserRole, ("project", proj_name, convs))
             
             if count > 0:
-                p_item.setForeground(0, QColor("#f4f4f5"))
+                p_item.setForeground(0, active_color)
                 for c_info in convs:
                     display_title = c_info.title if c_info.title else c_info.conv_id[:12]
                     if len(display_title) > 38:
@@ -448,14 +611,14 @@ class AntigravityManagerWindow(QMainWindow):
                 # Auto-dépliage des projets contenant des conversations
                 p_item.setExpanded(True)
             else:
-                p_item.setForeground(0, QColor("#71717a"))
+                p_item.setForeground(0, empty_color)
 
             self.tree.addTopLevelItem(p_item)
 
         # Section 2 : Conversations Récentes
         conv_header_item = QTreeWidgetItem(["CONVERSATIONS RÉCENTES"])
         conv_header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-        conv_header_item.setForeground(0, QColor("#a1a1aa"))
+        conv_header_item.setForeground(0, header_color)
         f2 = conv_header_item.font(0)
         f2.setBold(True)
         conv_header_item.setFont(0, f2)
@@ -501,93 +664,112 @@ class AntigravityManagerWindow(QMainWindow):
         self.btn_open_folder.setVisible(True)
 
         messages = load_chat_messages(info.conv_id)
+        is_dark = get_active_theme() == "dark"
 
         if not messages:
-            html = """
-            <div style="text-align: center; margin-top: 60px; color: #71717a; font-family: sans-serif;">
+            info_col = "#a1a1aa" if is_dark else "#475569"
+            sub_col = "#71717a" if is_dark else "#64748b"
+            html = f"""
+            <div style="text-align: center; margin-top: 60px; font-family: sans-serif;">
                 <p style="font-size: 24px;">ℹ️</p>
-                <p style="font-size: 14px; font-weight: bold; color: #a1a1aa;">Aucun message textuel dans les journaux.</p>
-                <p style="font-size: 12px;">Cette session correspond probablement à une sous-tâche technique (subagent)<br>ou ses journaux ont été archivés.</p>
+                <p style="font-size: 14px; font-weight: bold; color: {info_col};">Aucun message textuel dans les journaux.</p>
+                <p style="font-size: 12px; color: {sub_col};">Cette session correspond probablement à une sous-tâche technique (subagent)<br>ou ses journaux ont été archivés.</p>
             </div>
             """
             self.chat_browser.setHtml(html)
             return
 
+        # Couleurs selon le thème
+        if is_dark:
+            body_bg, body_col = "#18181b", "#e4e4e7"
+            user_bg, user_border, user_title_col, user_text_col = "#27272a", "#3f3f46", "#60a5fa", "#ffffff"
+            model_bg, model_border, model_title_col, model_text_col = "#18181b", "#8b5cf6", "#a78bfa", "#e4e4e7"
+            pre_bg, pre_border, pre_col = "#121215", "#27272a", "#38bdf8"
+            code_bg, code_col = "#27272a", "#38bdf8"
+            hr_col, time_col = "#27272a", "#71717a"
+        else:
+            body_bg, body_col = "#ffffff", "#0f172a"
+            user_bg, user_border, user_title_col, user_text_col = "#f0f9ff", "#bae6fd", "#0284c7", "#0f172a"
+            model_bg, model_border, model_title_col, model_text_col = "#ffffff", "#7c3aed", "#6d28d9", "#1e293b"
+            pre_bg, pre_border, pre_col = "#f8fafc", "#e2e8f0", "#0369a1"
+            code_bg, code_col = "#f1f5f9", "#0369a1"
+            hr_col, time_col = "#e2e8f0", "#94a3b8"
+
         # Construction du document HTML moderne
         html_parts = [
-            """<!DOCTYPE html>
+            f"""<!DOCTYPE html>
             <html>
             <head>
             <style>
-                body {
-                    background-color: #18181b;
-                    color: #e4e4e7;
+                body {{
+                    background-color: {body_bg};
+                    color: {body_col};
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
                     font-size: 13px;
                     line-height: 1.6;
                     margin: 0;
                     padding: 10px;
-                }
-                .msg-container {
+                }}
+                .msg-container {{
                     margin-bottom: 24px;
-                }
-                .user-box {
-                    background-color: #27272a;
-                    border: 1px solid #3f3f46;
+                }}
+                .user-box {{
+                    background-color: {user_bg};
+                    border: 1px solid {user_border};
                     border-radius: 8px;
                     padding: 12px 16px;
                     margin-bottom: 12px;
-                }
-                .user-header {
+                }}
+                .user-header {{
                     font-weight: bold;
-                    color: #60a5fa;
+                    color: {user_title_col};
                     font-size: 12px;
                     margin-bottom: 6px;
                     display: flex;
                     justify-content: space-between;
-                }
-                .model-box {
-                    background-color: #18181b;
-                    border-left: 3px solid #8b5cf6;
+                }}
+                .model-box {{
+                    background-color: {model_bg};
+                    border-left: 3px solid {model_border};
                     padding: 4px 16px;
                     margin-bottom: 16px;
-                }
-                .model-header {
+                }}
+                .model-header {{
                     font-weight: bold;
-                    color: #a78bfa;
+                    color: {model_title_col};
                     font-size: 12px;
                     margin-bottom: 6px;
-                }
-                .time-tag {
-                    color: #71717a;
+                }}
+                .time-tag {{
+                    color: {time_col};
                     font-weight: normal;
                     font-size: 11px;
                     float: right;
-                }
-                pre {
-                    background-color: #121215;
-                    border: 1px solid #27272a;
+                }}
+                pre {{
+                    background-color: {pre_bg};
+                    border: 1px solid {pre_border};
                     border-radius: 6px;
                     padding: 10px;
                     overflow-x: auto;
                     font-family: 'Consolas', 'Fira Code', monospace;
                     font-size: 12px;
-                    color: #38bdf8;
-                }
-                code {
-                    background-color: #27272a;
+                    color: {pre_col};
+                }}
+                code {{
+                    background-color: {code_bg};
                     padding: 2px 4px;
                     border-radius: 4px;
                     font-family: 'Consolas', monospace;
                     font-size: 12px;
-                    color: #38bdf8;
-                }
-                hr {
+                    color: {code_col};
+                }}
+                hr {{
                     border: 0;
                     height: 1px;
-                    background-color: #27272a;
+                    background-color: {hr_col};
                     margin: 20px 0;
-                }
+                }}
             </style>
             </head>
             <body>
@@ -765,7 +947,8 @@ class AntigravityManagerWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setStyleSheet(DARK_QSS)
+    active_theme = get_active_theme()
+    app.setStyleSheet(DARK_QSS if active_theme == "dark" else LIGHT_QSS)
 
     window = AntigravityManagerWindow()
     window.show()

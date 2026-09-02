@@ -62,3 +62,26 @@ def test_get_roots_with_custom_config(tmp_path, monkeypatch):
 
     assert get_projects_root() == custom_p
     assert get_antigravity_root() == custom_ag
+
+
+def test_theme_functions(tmp_path, monkeypatch):
+    """Vérifie le comportement de detect_system_theme et get_active_theme."""
+    from config import detect_system_theme, get_active_theme
+
+    dummy_config_file = tmp_path / "config.json"
+    monkeypatch.setattr("config.CONFIG_FILE", dummy_config_file)
+
+    # 1. Thème forcé clair
+    save_config({"theme": "light"})
+    assert get_active_theme() == "light"
+
+    # 2. Thème forcé sombre
+    save_config({"theme": "dark"})
+    assert get_active_theme() == "dark"
+
+    # 3. Thème système
+    save_config({"theme": "system"})
+    sys_theme = detect_system_theme()
+    assert sys_theme in ("light", "dark")
+    assert get_active_theme() == sys_theme
+
