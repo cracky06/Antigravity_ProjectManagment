@@ -4,11 +4,18 @@ import json
 import os
 from pathlib import Path
 
+import sys
+
 # Chemins par défaut
 DEFAULT_PROJECTS_ROOT = r"D:\DEV"
 DEFAULT_ANTIGRAVITY_ROOT = os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity")
 
-CONFIG_FILE = Path(__file__).resolve().parent / "config.json"
+def _get_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+CONFIG_FILE = _get_base_dir() / "config.json"
 
 
 def load_config() -> dict:

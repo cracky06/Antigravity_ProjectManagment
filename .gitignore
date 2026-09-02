@@ -14,3 +14,9 @@ config.json
 env/
 venv/
 ENV/
+
+# PyInstaller / Build & Dist
+build/
+dist/
+*.spec
+
