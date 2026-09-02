@@ -60,6 +60,11 @@ from data_loader import (
     _find_brain_path,
 )
 
+try:
+    import markdown
+except ImportError:
+    markdown = None
+
 # =====================================================================
 # STYLES CSS / QSS (Thèmes Clair & Sombre Antigravity)
 # =====================================================================
@@ -1035,6 +1040,39 @@ class AntigravityManagerWindow(QMainWindow):
                     font-size: 11px;
                     float: right;
                 }}
+                h1, h2, h3, h4 {{
+                    margin-top: 12px;
+                    margin-bottom: 6px;
+                    color: {model_title_col};
+                }}
+                h1 {{ font-size: 16px; border-bottom: 1px solid {hr_col}; padding-bottom: 3px; }}
+                h2 {{ font-size: 15px; border-bottom: 1px solid {hr_col}; padding-bottom: 2px; }}
+                h3 {{ font-size: 14px; }}
+                h4 {{ font-size: 13px; }}
+                p {{ margin: 4px 0; }}
+                ul, ol {{ margin: 4px 0; padding-left: 20px; }}
+                li {{ margin-bottom: 2px; }}
+                strong {{ font-weight: bold; }}
+                blockquote {{
+                    border-left: 3px solid {model_border};
+                    margin: 6px 0;
+                    padding: 4px 10px;
+                    color: {time_col};
+                }}
+                table {{
+                    border-collapse: collapse;
+                    width: 100%;
+                    margin: 10px 0;
+                }}
+                th, td {{
+                    border: 1px solid {hr_col};
+                    padding: 5px 8px;
+                    text-align: left;
+                }}
+                th {{
+                    background-color: {pre_bg};
+                    font-weight: bold;
+                }}
                 pre {{
                     background-color: {pre_bg};
                     border: 1px solid {pre_border};
@@ -1071,13 +1109,27 @@ class AntigravityManagerWindow(QMainWindow):
             ts = msg.get("timestamp", "")
             time_html = f"<span class='time-tag'>{ts}</span>" if ts else ""
 
-            # Échappement et mise en forme légère du texte
-            escaped = (
-                raw_text.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            )
-            formatted = escaped.replace("\n", "<br>")
+            # Interprétation Markdown complète
+            if markdown:
+                try:
+                    formatted = markdown.markdown(
+                        raw_text,
+                        extensions=["fenced_code", "tables", "nl2br"]
+                    )
+                except Exception:
+                    escaped = (
+                        raw_text.replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                    )
+                    formatted = escaped.replace("\n", "<br>")
+            else:
+                escaped = (
+                    raw_text.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                )
+                formatted = escaped.replace("\n", "<br>")
 
             if role == "user":
                 html_parts.append(f"""

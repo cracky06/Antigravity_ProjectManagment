@@ -39,3 +39,21 @@ def test_settings_dialog_instantiation(qapp):
     assert dlg.proj_edit.text() != ""
     assert dlg.ag_edit.text() != ""
     dlg.close()
+
+
+def test_changelog_dialog_and_markdown_rendering(qapp):
+    """Vérifie l'instanciation de ChangelogDialog et la présence du module markdown."""
+    from antigravity_manager import ChangelogDialog
+    import markdown
+
+    dlg = ChangelogDialog()
+    assert dlg.windowTitle().startswith("Historique")
+    assert dlg.tree.topLevelItemCount() >= 1
+    dlg.close()
+
+    # Vérification du parseur markdown
+    html = markdown.markdown("# Titre\n\n**Texte gras**\n\n- Puce", extensions=["fenced_code", "tables"])
+    assert "<h1>Titre</h1>" in html
+    assert "<strong>Texte gras</strong>" in html
+    assert "<li>Puce</li>" in html
+
