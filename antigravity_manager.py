@@ -42,6 +42,10 @@ from config import (
     get_projects_root,
     get_antigravity_root,
     get_active_theme,
+    get_app_version,
+    get_last_seen_version,
+    set_last_seen_version,
+    get_changelog_data,
     DEFAULT_PROJECTS_ROOT,
     DEFAULT_ANTIGRAVITY_ROOT,
 )
@@ -374,6 +378,11 @@ class SettingsDialog(QDialog):
         btn_reset.clicked.connect(self._reset_defaults)
         btn_box.addWidget(btn_reset)
 
+        btn_changelog = QPushButton("📜 Quoi de neuf ?")
+        btn_changelog.setToolTip("Afficher l'historique des modifications de cette version")
+        btn_changelog.clicked.connect(self._open_changelog)
+        btn_box.addWidget(btn_changelog)
+
         btn_box.addStretch()
 
         btn_cancel = QPushButton("Annuler")
@@ -402,6 +411,10 @@ class SettingsDialog(QDialog):
         self.ag_edit.setText(str(DEFAULT_ANTIGRAVITY_ROOT))
         self.theme_combo.setCurrentIndex(0)
 
+    def _open_changelog(self):
+        dlg = ChangelogDialog(self)
+        dlg.show()
+
     def _save(self):
         cfg = load_config()
         cfg["projects_root"] = self.proj_edit.text().strip()
@@ -411,6 +424,83 @@ class SettingsDialog(QDialog):
         self.accept()
         if self.on_save_callback:
             self.on_save_callback()
+
+
+# =====================================================================
+# Boîte de Dialogue Modeless : Changelog (Notes de Version)
+# =====================================================================
+class ChangelogDialog(QDialog):
+    """Fenêtre modeless affichant l'historique des versions sous forme de TreeView compacte."""
+
+    def __init__(self, parent: QMainWindow | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Historique des Mises à Jour — Antigravity Manager")
+        self.resize(620, 520)
+        self.setMinimumSize(450, 320)
+        self.setModal(False)  # Fenêtre non-bloquante (modeless)
+
+        icon = _get_app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        header_layout = QHBoxLayout()
+        header_title = QLabel("🚀 Notes de Version")
+        header_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        header_layout.addWidget(header_title)
+        header_layout.addStretch()
+
+        layout.addLayout(header_layout)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(18)
+        self.tree.setAnimated(True)
+        layout.addWidget(self.tree)
+
+        changelog = get_changelog_data()
+        is_dark = get_active_theme() == "dark"
+        tag_color = QColor("#60a5fa" if is_dark else "#0284c7")
+        cat_color = QColor("#a78bfa" if is_dark else "#6d28d9")
+        item_color = QColor("#f4f4f5" if is_dark else "#0f172a")
+
+        for ver, cats in changelog.items():
+            ver_item = QTreeWidgetItem([f"📦 Version {ver} (Actuelle)"])
+            ver_item.setForeground(0, tag_color)
+            f = ver_item.font(0)
+            f.setBold(True)
+            f.setPointSize(f.pointSize() + 1)
+            ver_item.setFont(0, f)
+            self.tree.addTopLevelItem(ver_item)
+
+            for cat, items in cats.items():
+                cat_item = QTreeWidgetItem([cat])
+                cat_item.setForeground(0, cat_color)
+                f_c = cat_item.font(0)
+                f_c.setBold(True)
+                cat_item.setFont(0, f_c)
+                ver_item.addChild(cat_item)
+
+                for it in items:
+                    leaf = QTreeWidgetItem([f"  •  {it}"])
+                    leaf.setForeground(0, item_color)
+                    cat_item.addChild(leaf)
+
+            ver_item.setExpanded(True)
+            for i in range(ver_item.childCount()):
+                ver_item.child(i).setExpanded(True)
+
+        bottom_bar = QHBoxLayout()
+        bottom_bar.addStretch()
+        btn_close = QPushButton("Fermer")
+        btn_close.setStyleSheet("padding: 6px 18px; font-weight: bold; border-radius: 5px;")
+        btn_close.clicked.connect(self.close)
+        bottom_bar.addWidget(btn_close)
+        layout.addLayout(bottom_bar)
+
 
 
 def _get_app_icon() -> QIcon:
@@ -436,7 +526,8 @@ def _get_app_icon() -> QIcon:
 class AntigravityManagerWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Antigravity Manager — Project & Chat Management (PyQt6)")
+        self.version = get_app_version()
+        self.setWindowTitle(f"Antigravity Manager v{self.version} — Project & Chat Management")
         self.resize(1260, 840)
         self.setMinimumSize(850, 520)
 
@@ -448,10 +539,21 @@ class AntigravityManagerWindow(QMainWindow):
         self.project_convs: dict[str, list[ConversationInfo]] = {}
         self.all_convs: list[ConversationInfo] = []
         self.selected_conv: ConversationInfo | None = None
+        self.show_raw_markdown: bool = False
+        self.changelog_dialog: ChangelogDialog | None = None
 
         self._apply_theme()
         self._build_ui()
         self.reload_data()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Affichage automatique de la fenêtre de changelog (modeless) au 1er lancement d'une mise à jour
+        last_seen = get_last_seen_version()
+        if last_seen != self.version:
+            set_last_seen_version(self.version)
+            self.changelog_dialog = ChangelogDialog(self)
+            self.changelog_dialog.show()
 
     def _apply_theme(self):
         app = QApplication.instance()
@@ -502,7 +604,7 @@ class AntigravityManagerWindow(QMainWindow):
 
         btn_settings = QPushButton("⚙️")
         btn_settings.setProperty("class", "toolBtn")
-        btn_settings.setToolTip("Paramètres des dossiers")
+        btn_settings.setToolTip("Paramètres des dossiers & Thème")
         btn_settings.clicked.connect(self._open_settings)
         sb_header.addWidget(btn_settings)
 
@@ -528,6 +630,7 @@ class AntigravityManagerWindow(QMainWindow):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.currentItemChanged.connect(self._on_current_item_changed)
         sidebar_layout.addWidget(self.tree)
 
         self.splitter.addWidget(sidebar)
@@ -552,6 +655,13 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_title.setObjectName("chatTitle")
         header_top_row.addWidget(self.chat_title)
         header_top_row.addStretch()
+
+        self.btn_toggle_raw = QPushButton("<> Source")
+        self.btn_toggle_raw.setProperty("class", "toolBtn")
+        self.btn_toggle_raw.setToolTip("Basculer entre la vue riche HTML et le code Markdown brut (<>)")
+        self.btn_toggle_raw.clicked.connect(self._toggle_markdown_mode)
+        self.btn_toggle_raw.setVisible(False)
+        header_top_row.addWidget(self.btn_toggle_raw)
 
         self.btn_open_folder = QPushButton("📂 Ouvrir le dossier")
         self.btn_open_folder.setProperty("class", "toolBtn")
@@ -736,8 +846,8 @@ class AntigravityManagerWindow(QMainWindow):
                     c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
                     p_item.addChild(c_item)
                 
-                # Auto-dépliage des projets contenant des conversations
-                p_item.setExpanded(True)
+                # En mode "Tous les projets", les dossiers restent repliés par défaut
+                p_item.setExpanded(False)
             else:
                 p_item.setForeground(0, empty_color)
 
@@ -779,8 +889,28 @@ class AntigravityManagerWindow(QMainWindow):
             if item.childCount() > 0:
                 item.setExpanded(not item.isExpanded())
 
+    def _on_current_item_changed(self, current: QTreeWidgetItem | None, previous: QTreeWidgetItem | None):
+        """Met à jour l'affichage lors de la navigation au clavier (flèches haut/bas)."""
+        if not current:
+            return
+        data = current.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        dtype = data[0]
+        if dtype == "conv":
+            c_info: ConversationInfo = data[1]
+            if not self.selected_conv or self.selected_conv.conv_id != c_info.conv_id:
+                self.display_chat(c_info)
+
+    def _toggle_markdown_mode(self):
+        """Bascule entre la vue riche HTML et le mode markdown source brut (<>)."""
+        self.show_raw_markdown = not self.show_raw_markdown
+        self.btn_toggle_raw.setText("👁️ Vue Riche" if self.show_raw_markdown else "<> Source")
+        if self.selected_conv:
+            self.display_chat(self.selected_conv)
+
     # -----------------------------------------------------------------
-    # Affichage du Chat avec Rendu HTML / CSS Riche
+    # Affichage du Chat avec Rendu HTML / CSS Riche & Mode Markdown
     # -----------------------------------------------------------------
     def display_chat(self, info: ConversationInfo):
         self.selected_conv = info
@@ -791,6 +921,7 @@ class AntigravityManagerWindow(QMainWindow):
         date_str = info.last_activity.strftime("%d/%m/%Y à %H:%M") if info.last_activity else "Date inconnue"
         self.chat_meta.setText(f"{proj_str}   •   {date_str}   •   ID: {info.conv_id}")
         self.btn_open_folder.setVisible(True)
+        self.btn_toggle_raw.setVisible(True)
 
         messages = load_chat_messages(info.conv_id)
         is_dark = get_active_theme() == "dark"
@@ -822,9 +953,38 @@ class AntigravityManagerWindow(QMainWindow):
             model_bg, model_border, model_title_col, model_text_col = "#ffffff", "#7c3aed", "#6d28d9", "#1e293b"
             pre_bg, pre_border, pre_col = "#f8fafc", "#e2e8f0", "#0369a1"
             code_bg, code_col = "#f1f5f9", "#0369a1"
-            hr_col, time_col = "#e2e8f0", "#94a3b8"
+            hr_col, time_col = "#e2e8f0", "#64748b"
 
-        # Construction du document HTML moderne
+        # Mode Markdown Source Brut (<>)
+        if self.show_raw_markdown:
+            raw_blocks = []
+            for msg in messages:
+                role_label = "👤 Utilisateur" if msg.get("role") == "user" else "✨ Antigravity"
+                ts = msg.get("timestamp", "")
+                ts_str = f" ({ts})" if ts else ""
+                raw_blocks.append(f"### {role_label}{ts_str}\n\n{msg.get('text', '').strip()}\n\n" + "─" * 50 + "\n")
+
+            raw_content = "\n".join(raw_blocks)
+            escaped_raw = (
+                raw_content.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+            html = f"""<!DOCTYPE html><html><head><style>
+                body {{
+                    background-color: {body_bg};
+                    color: {body_col};
+                    font-family: 'Consolas', 'Fira Code', monospace;
+                    font-size: 13px;
+                    line-height: 1.5;
+                    padding: 16px;
+                    white-space: pre-wrap;
+                }}
+            </style></head><body>{escaped_raw}</body></html>"""
+            self.chat_browser.setHtml(html)
+            return
+
+        # Construction du document HTML moderne (Vue Riche)
         html_parts = [
             f"""<!DOCTYPE html>
             <html>
@@ -917,7 +1077,6 @@ class AntigravityManagerWindow(QMainWindow):
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
             )
-            # Retours à la ligne
             formatted = escaped.replace("\n", "<br>")
 
             if role == "user":
@@ -925,7 +1084,7 @@ class AntigravityManagerWindow(QMainWindow):
                 <div class="msg-container">
                     <div class="user-box">
                         <div class="user-header">👤 Utilisateur {time_html}</div>
-                        <div style="color: #ffffff;">{formatted}</div>
+                        <div style="color: {user_text_col};">{formatted}</div>
                     </div>
                 </div>
                 """)
@@ -934,7 +1093,7 @@ class AntigravityManagerWindow(QMainWindow):
                 <div class="msg-container">
                     <div class="model-box">
                         <div class="model-header">✨ Antigravity {time_html}</div>
-                        <div>{formatted}</div>
+                        <div style="color: {model_text_col};">{formatted}</div>
                     </div>
                 </div>
                 """)
@@ -948,6 +1107,7 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_title.setText("Sélectionnez une conversation")
         self.chat_meta.setText("Choisissez un projet ou une conversation dans la barre latérale.")
         self.btn_open_folder.setVisible(False)
+        self.btn_toggle_raw.setVisible(False)
         self.chat_browser.setHtml("")
 
     def _open_current_session_folder(self):

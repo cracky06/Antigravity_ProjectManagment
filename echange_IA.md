@@ -31,7 +31,8 @@
 - Automatisation des tags : `.\scripts\release.ps1 [minor|major]`
 
 ## Spécificités Techniques
-- `config.py` : gère la persistance des chemins et du thème dans `config.json` (auto-détection dynamique `antigravity-ide`, racine projet, et détection du thème OS Windows via registre `AppsUseLightTheme`, compatible `sys.frozen`).
+- `VERSION` : fichier unique définissant la version officielle (`1.0`).
+- `config.py` : gère la persistance des chemins, du thème, de la version et du changelog structuré dans `config.json`.
 - `data_loader.py` :
   - Découverte multi-dossiers résiliente d'`agyhub_summaries_proto.pb`.
   - Fonction `move_conversation(conv_id, target_project)` : réassignation officielle avec ré-encodage binaire protobuf wire-format pour compatibilité totale avec Google Antigravity IDE.
@@ -39,15 +40,19 @@
   - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
   - Extraction du workspace sécurisée : dé-échappement des sauts de ligne, exclusion des chemins internes (.gemini, brain, Temp), détection des `SearchPath` / `Cwd` et élimination des faux projets (`n`, `nLast`).
   - Rendu riche de fallback pour les sessions de sous-agents : affichage automatique des artéfacts markdown, des médias/images générés et du résumé des opérations techniques.
-- `antigravity_manager.py` : interface graphique moderne **PyQt6** :
+- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.0) :
+  - Barre de titre avec numéro de version officiel : `Antigravity Manager v1.0 — Project & Chat Management`.
   - Intégration de l'icône officielle de l'application (`assets/icon.png` / `assets/icon.ico`) dans la barre latérale, la barre de titre et la barre des tâches Windows via `SetCurrentProcessExplicitAppUserModelID`.
   - Boîte déroulante de filtre par projet en haut de la barre latérale : *Tous les projets*, *Sans projet (orphelines)*, ou *Projet individuel*.
-  - Badge de projet contextuel directement visible dans la liste des *Conversations Récentes* (`[📁 NomProjet]` ou `[⚠️ Sans projet]`).
-  - Support complet des thèmes **Système (Par défaut)**, **Clair (Light)** et **Sombre (Dark)** (`LIGHT_QSS` et `DARK_QSS`).
+  - Dépliage intelligent : dossiers repliés par défaut en vue globale (« Tous les projets »), dépliés automatiquement en vue filtrée.
+  - Navigation fluide au clavier (flèches haut/bas) avec actualisation instantanée de la discussion affichée.
+  - Correction intégrale du contraste en thème clair (textes noirs/gris foncé lisibles).
+  - Bascule double affichage : Vue Riche HTML ou Source Markdown brute (`<>`).
+  - Fenêtre modeless de Changelog sous forme de TreeView compacte au premier lancement d'une mise à jour (et accessible dans Paramètres ⚙️).
+  - Support complet des thèmes **Système (Par défaut)**, **Clair (Light)** et **Sombre (Dark)** avec bascule à chaud.
   - Arborescence native `QTreeWidget` (dépliage/repliage natif C++ à 60 FPS, zéro freeze, zéro clignotement).
-  - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné pour les bulles de messages et extraits de code.
-  - Redimensionnement fluide via `QSplitter`.
+  - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné.
   - Menus contextuels complets (déplacement / réassignation vers un autre projet, suppression en cascade, copie ID, ouverture dossier brain/projet).
 - `assets/` : icône officielle du gestionnaire (`icon.png` 1024x1024 transparent, `icon.ico` multi-résolution).
-- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`).
+- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (15 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`) et le fichier `VERSION`.
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.

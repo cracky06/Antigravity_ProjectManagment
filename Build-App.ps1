@@ -103,6 +103,7 @@ $PyInstallerArgs = @(
     "--name", "AntigravityManager",
     "--icon", "assets/icon.ico",
     "--add-data", "assets;assets",
+    "--add-data", "VERSION;.",
     "antigravity_manager.py"
 )
 

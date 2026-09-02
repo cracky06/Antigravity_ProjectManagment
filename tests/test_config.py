@@ -85,3 +85,28 @@ def test_theme_functions(tmp_path, monkeypatch):
     assert sys_theme in ("light", "dark")
     assert get_active_theme() == sys_theme
 
+
+def test_version_and_changelog(tmp_path, monkeypatch):
+    """Vérifie le chargement de la version et du changelog."""
+    from config import get_app_version, get_last_seen_version, set_last_seen_version, get_changelog_data
+
+    dummy_config_file = tmp_path / "config.json"
+    monkeypatch.setattr("config.CONFIG_FILE", dummy_config_file)
+
+    # Version par défaut ou depuis VERSION
+    v = get_app_version()
+    assert isinstance(v, str)
+    assert len(v) > 0
+
+    # Gestion de last_seen_version
+    assert get_last_seen_version() == ""
+    set_last_seen_version("1.0")
+    assert get_last_seen_version() == "1.0"
+
+    # Données du changelog
+    ch = get_changelog_data()
+    assert isinstance(ch, dict)
+    assert "v1.0" in ch
+    assert "✨ Nouvelles fonctionnalités (feat)" in ch["v1.0"]
+
+

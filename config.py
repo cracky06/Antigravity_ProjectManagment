@@ -94,3 +94,63 @@ def get_active_theme() -> str:
         return theme_choice
     return detect_system_theme()
 
+
+# -----------------------------------------------------------------
+# Gestion des Versions & Changelog
+# -----------------------------------------------------------------
+def get_app_version() -> str:
+    """Lit le numéro de version depuis le fichier VERSION ou fallback sur 1.0."""
+    version_file = _get_base_dir() / "VERSION"
+    if version_file.is_file():
+        try:
+            v = version_file.read_text(encoding="utf-8").strip()
+            if v:
+                return v
+        except Exception:
+            pass
+    return "1.0"
+
+
+def get_last_seen_version() -> str:
+    """Retourne la dernière version enregistrée lors d'un lancement précédent."""
+    cfg = load_config()
+    return cfg.get("last_seen_version", "")
+
+
+def set_last_seen_version(version: str) -> None:
+    """Enregistre la version actuelle comme ayant été vue."""
+    cfg = load_config()
+    cfg["last_seen_version"] = version
+    save_config(cfg)
+
+
+def get_changelog_data() -> dict[str, dict[str, list[str]]]:
+    """Retourne l'historique structuré des versions."""
+    return {
+        "v1.0": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Migration complète de l'interface vers PyQt6 (zéro scintillement, dépliage natif C++ fluide)",
+                "Déplacement officiel de conversations vers un projet (mise à jour binaire protobuf pour synchronisation directe avec Antigravity IDE)",
+                "Filtre par projet dans la barre latérale (Tous les projets, Sans projet, projet individuel)",
+                "Badge du projet associé dans la liste des conversations récentes",
+                "Bascule d'affichage entre Vue Riche HTML et Source Markdown brute (<>)",
+                "Prise en charge intégrale des thèmes Système (par défaut), Sombre et Clair avec bascule à chaud",
+                "Gestion formelle des numéros de version (fichier VERSION et affichage dans le titre)",
+                "Fenêtre de changelog modeless automatique lors de nouvelles versions",
+            ],
+            "🐛 Corrections & Robustesse (fix)": [
+                "Élimination définitive des faux projets 'n' et 'nLast' (assainissement des sauts de ligne dans les logs)",
+                "Correction du contraste du texte en thème clair (remplacement du texte blanc par un gris foncé lisible)",
+                "Dépliage intelligent des dossiers (repliés en vue globale, dépliés en vue filtrée)",
+                "Navigation fluide au clavier avec les flèches haut/bas dans l'arborescence",
+                "Gestion robuste des sessions de sous-agents techniques (affichage d'artéfacts et résumé des actions)",
+            ],
+            "🎨 Identité Visuelle & Ergonomie (ui)": [
+                "Intégration de l'icône officielle Antigravity Manager (vecteur 2D colorisé sur fond noir)",
+                "Enregistrement de l'AppUserModelID Windows pour un affichage parfait dans la barre des tâches",
+                "Logo d'application affiché dans la barre latérale et la barre de titre",
+            ],
+        }
+    }
+
+
