@@ -78,6 +78,32 @@ def _parse_proto_fields(data: bytes):
     return fields
 
 
+def _clean_path_string(raw: str) -> str:
+    """Nettoie et normalise une URL file:/// ou un chemin pour éliminer les délimiteurs protobuf et caractères non imprimables."""
+    if not raw:
+        return ""
+    if "file:///" in raw:
+        idx = raw.find("file:///")
+        raw = raw[idx + 8 :]
+
+    # Nettoyer les caractères de contrôle, délimiteurs protobuf, etc.
+    cleaned = []
+    for ch in raw:
+        code = ord(ch)
+        if code < 32 or code == 127:
+            break
+        if ch in ('"', "<", ">", "|", "?", "*", "\x00", "\x12", "\x1a"):
+            break
+        cleaned.append(ch)
+
+    res = "".join(cleaned).strip()
+    res = unquote(res).replace("/", "\\")
+    # Normalisation lettre de lecteur Windows
+    if len(res) >= 2 and res[1] == ":":
+        res = res[0].upper() + res[1:]
+    return res
+
+
 def _extract_proto_metadata():
     """Extrait pour chaque conversation son titre officiel et son workspace
     depuis agyhub_summaries_proto.pb.
@@ -121,41 +147,57 @@ def _extract_proto_metadata():
                 except Exception:
                     pass
 
-            # Extraction des chaînes file:///
-            for _, val_list in sub.items():
-                for wtype, v in val_list:
-                    if wtype == 2:
-                        try:
-                            s = v.decode("utf-8", errors="ignore")
-                            if "file:///" in s:
-                                for part in s.split("\x00"):
-                                    if "file:///" in part:
-                                        idx = part.find("file:///")
-                                        raw_ws = part[idx:]
-                                        clean_ws = unquote(raw_ws.replace("file:///", "")).replace("/", "\\")
-                                        if len(clean_ws) >= 2 and clean_ws[1] == ":":
-                                            clean_ws = clean_ws[0].upper() + clean_ws[1:]
-                                        if not workspace or "DEV" in clean_ws.upper():
-                                            workspace = clean_ws
-                        except Exception:
-                            pass
-                        # Sous-message imbriqué
-                        try:
-                            nested = _parse_proto_fields(v)
-                            for _, nval_list in nested.items():
-                                for nwtype, nv in nval_list:
-                                    if nwtype == 2:
-                                        ns = nv.decode("utf-8", errors="ignore")
-                                        if "file:///" in ns:
-                                            idx = ns.find("file:///")
-                                            raw_ws = ns[idx:]
-                                            clean_ws = unquote(raw_ws.replace("file:///", "")).replace("/", "\\")
-                                            if len(clean_ws) >= 2 and clean_ws[1] == ":":
-                                                clean_ws = clean_ws[0].upper() + clean_ws[1:]
-                                            if not workspace or "DEV" in clean_ws.upper():
-                                                workspace = clean_ws
-                        except Exception:
-                            pass
+            # Extraction prioritaire depuis sub[9] (métadonnées structurées du workspace)
+            if 9 in sub:
+                for _, v in sub[9]:
+                    if isinstance(v, bytes):
+                        nested = _parse_proto_fields(v)
+                        for k in (1, 2, 7):
+                            if k in nested:
+                                for _, nv in nested[k]:
+                                    if isinstance(nv, bytes):
+                                        c = _clean_path_string(nv.decode("utf-8", errors="ignore"))
+                                        if c and (not workspace or "DEV" in c.upper()):
+                                            workspace = c
+                                            break
+                            if workspace:
+                                break
+                    if workspace:
+                        break
+
+            # Extraction secondaire depuis sub[17]
+            if not workspace and 17 in sub:
+                for _, v in sub[17]:
+                    if isinstance(v, bytes):
+                        nested = _parse_proto_fields(v)
+                        for k in (7, 1):
+                            if k in nested:
+                                for _, nv in nested[k]:
+                                    if isinstance(nv, bytes):
+                                        c = _clean_path_string(nv.decode("utf-8", errors="ignore"))
+                                        if c and (not workspace or "DEV" in c.upper()):
+                                            workspace = c
+                                            break
+                            if workspace:
+                                break
+                    if workspace:
+                        break
+
+            # Repli générique sécurisé sur tous les champs
+            if not workspace:
+                for _, val_list in sub.items():
+                    for wtype, v in val_list:
+                        if wtype == 2 and isinstance(v, bytes) and b"file:///" in v:
+                            try:
+                                s = v.decode("utf-8", errors="ignore")
+                                c = _clean_path_string(s)
+                                if c:
+                                    workspace = c
+                                    break
+                            except Exception:
+                                pass
+                    if workspace:
+                        break
 
         results[cid] = {"title": title, "workspace": workspace}
 

@@ -26,6 +26,13 @@ Write-Host "=============================================" -ForegroundColor Cyan
 
 # 1. Nettoyage
 Write-Host "`n[1/3] Nettoyage des anciens builds..." -ForegroundColor Yellow
+
+Get-Process -Name "AntigravityManager" -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "  Fermeture de l'instance active d'AntigravityManager (PID: $($_.Id))..." -ForegroundColor Yellow
+    Stop-Process -Id $_.Id -Force
+    Start-Sleep -Milliseconds 500
+}
+
 $DirectoriesToClean = @("build", "dist")
 foreach ($Dir in $DirectoriesToClean) {
     $Target = Join-Path -Path $ScriptDir -ChildPath $Dir
