@@ -39,6 +39,7 @@ Antigravity_ProjectManagment/
 ## ⚙️ 3. Spécificités Techniques & Gotchas
 
 ### 🧬 Décodage Protobuf Wire-Format (`data_loader.py`)
+
 * Le fichier `%USERPROFILE%\.gemini\antigravity-ide\agyhub_summaries_proto.pb` contient les métadonnées officielles de toutes les conversations.
 * **Extraction des chemins (`file:///`)** :
   * Ne jamais faire de split naïf sur `\x00` ou `file:///`.
@@ -46,14 +47,17 @@ Antigravity_ProjectManagment/
   * Privilégier les sous-champs structurés `sub[9]` et `sub[17]`.
 
 ### 📂 Résolution Multi-Dossiers Antigravity
+
 * Antigravity 2.0 / IDE actif stocke ses données dans `%USERPROFILE%\.gemini\antigravity-ide`.
 * Les versions antérieures utilisaient `%USERPROFILE%\.gemini\antigravity`.
 * `_find_brain_path()` et `_find_transcript_file()` doivent toujours vérifier le dossier configuré puis inspecter les dossiers frères pour ne perdre aucune conversation ni aucun journal.
 
 ### 📝 Fallback sur Artefacts
+
 * Lorsque `transcript.jsonl` ou `transcript_full.jsonl` est absent (sessions techniques, sous-agents, logs nettoyés), `load_chat_messages()` lit et formate les artefacts disponibles (`walkthrough.md`, `task.md`, `implementation_plan.md`).
 
 ### 📦 Mode Compilé PyInstaller (`config.py`)
+
 * Lorsque l'application est exécutée sous forme de binaire (`sys.frozen == True`), `config.json` doit être localisé dans le même répertoire que `sys.executable` (et non dans le dossier temporaire `_MEIxxxx`).
 
 ---
@@ -61,6 +65,7 @@ Antigravity_ProjectManagment/
 ## 🛠️ 4. Commandes & Workflows de Développement
 
 ### 🚀 Exécution locale
+
 ```powershell
 # Via batch
 .\run.bat
@@ -70,6 +75,7 @@ Antigravity_ProjectManagment/
 ```
 
 ### 📦 Compilation & Packaging (.exe)
+
 ```powershell
 # Compilation complète de l'exécutable autonome (dist/AntigravityManager.exe)
 .\Build-App.ps1
@@ -79,6 +85,7 @@ Antigravity_ProjectManagment/
 ```
 
 ### 🏷️ Release & Versioning
+
 ```powershell
 # Incrément mineur (ex: 1.0 -> 1.1)
 .\scripts\release.ps1 minor
@@ -103,3 +110,6 @@ Antigravity_ProjectManagment/
    * Respecter le formalisme `Verb-Noun` (ex: `Build-App.ps1`, `New-Release`).
    * Proscrire les alias dans les scripts (`dir` ➔ `Get-ChildItem`, etc.).
 6. **Typage Python** : Utiliser les *Type Hints* Python 3.10+ (`def func(param: str | None) -> Path:`) et `pathlib.Path`.
+7. **Mémoire Vive Partagée (`echange_IA.md`)** :
+   * Au démarrage de chaque session, lire systématiquement [`echange_IA.md`](./echange_IA.md).
+   * À la fin d'une évolution majeure ou d'une release, mettre à jour `echange_IA.md` avec la date, le numéro de version et les décisions clés.
