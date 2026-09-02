@@ -64,13 +64,13 @@ $PyInstallerCmd = if (Test-Path -Path $VenvPyInstaller) { $VenvPyInstaller } els
 Write-Host "  Interpreteur : $PythonCmd" -ForegroundColor Gray
 
 try {
-    & $PythonCmd -c "import customtkinter, PyInstaller" 2>$null
+    & $PythonCmd -c "import PyQt6, PyInstaller" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  Installation des dependances requises..." -ForegroundColor Gray
         & $PythonCmd -m pip install -r requirements.txt
     }
     else {
-        Write-Host "  Dependances detectees (customtkinter, PyInstaller)." -ForegroundColor Green
+        Write-Host "  Dependances detectees (PyQt6, PyInstaller)." -ForegroundColor Green
     }
 }
 catch {
@@ -85,7 +85,6 @@ $PyInstallerArgs = @(
     "--noconfirm",
     "--windowed",
     "--name", "AntigravityManager",
-    "--collect-all", "customtkinter",
     "antigravity_manager.py"
 )
 

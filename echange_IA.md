@@ -7,12 +7,12 @@
 
 ## Environnement & Dépendances
 - Environnement virtuel local : `.venv` (Python 3.10)
-- Fichier de dépendances : `requirements.txt` (`customtkinter>=5.2.0`, `pyinstaller>=6.0.0`)
+- Fichier de dépendances : `requirements.txt` (`PyQt6>=6.6.0`, `pyinstaller>=6.0.0`)
 - Installation : `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`
 
 ## Compilation & Distribution
 - Script de compilation : `build.bat` ou `.\Build-App.ps1`
-- Exécutable produit : `dist/AntigravityManager.exe` (~8.7 Mo, autonome sans console)
+- Exécutable produit : `dist/AntigravityManager.exe` (~32 Mo, autonome sans console, moteur natif Qt6)
 
 ## Déploiement & Run
 - Lancement direct : `run.bat` (utilise automatiquement `.venv` s'il existe)
@@ -32,6 +32,10 @@
   - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
   - Extraction du workspace depuis les transcripts si absent du proto (`Active Document:` / URIs).
   - Filtrage des stubs de sous-agents orphelins et fallback sur les artéfacts markdown (`walkthrough.md`, `task.md`, `implementation_plan.md`).
-- `antigravity_manager.py` : interface graphique CustomTkinter avec sélection légère (0 ms sans reconstruction de l'arbre), chevrons interactifs (`▼`/`▶`), auto-dépliage des projets actifs au lancement, suppression en cascade et visionneuse de chat instantanée.
+- `antigravity_manager.py` : interface graphique moderne **PyQt6** :
+  - Arborescence native `QTreeWidget` (dépliage/repliage natif C++ à 60 FPS, zéro freeze, zéro clignotement).
+  - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS pour les bulles de messages et extraits de code.
+  - Redimensionnement fluide via `QSplitter`.
+  - Menus contextuels complets (suppression en cascade, copie ID, ouverture dossier brain/projet).
 - `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la détection du `.venv` et le packaging PyInstaller.
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.
