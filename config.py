@@ -138,6 +138,22 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.5": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Index de recherche plein-texte SQLite FTS5 : la recherche globale est désormais instantanée (plus de parsing des transcripts à chaque frappe)",
+                "Trois modes de recherche via les boutons [.*] et [Ab] du champ : « contient » (défaut), « mots » (index FTS, tolérant aux accents et aux préfixes) et « regex » (expression régulière, bordure rouge si le motif est invalide)",
+                "Recherche exécutée en tâche de fond : l'interface ne se fige plus, même au premier lancement sur « Tous les projets »",
+                "Barre de recherche locale : compteur d'occurrences « n / total », surlignage de toutes les occurrences, navigation ▲/▼ (et F3 / Maj+F3) avec wrap-around",
+                "Bouton « Réindexer » dans les Paramètres + affichage de l'état de l'index (prêt / absent / corrompu)",
+            ],
+            "🐛 Corrections & Robustesse (fix)": [
+                "Reconstruction automatique de l'index s'il est détecté corrompu, avec repli sur la recherche à la volée le temps de l'indexation",
+                "Suppression d'un QApplication.processEvents() réentrant dans le rechargement des données (source de plantages rares)",
+            ],
+            "🔧 Qualité & Outillage (chore)": [
+                "Couverture de tests portée à 54 tests (module d'index, modes de recherche, compteur de la find bar, isolation de l'index en test)",
+            ],
+        },
         "v1.4": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Raccourcis clavier : Ctrl+K / Ctrl+L (recherche globale), F3 / Maj+F3 (occurrence suivante / précédente), Échap (ferme la barre de recherche locale ou efface la recherche globale)",

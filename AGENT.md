@@ -19,8 +19,9 @@ Ce document définit les directives d'architecture, les spécifications techniqu
 
 ```
 Antigravity_ProjectManagment/
-├── antigravity_manager.py   # Interface GUI principale (CustomTkinter, panneau dépliable, viewer de chat)
+├── antigravity_manager.py   # Interface GUI principale (PyQt6, panneau dépliable, viewer de chat, recherche async)
 ├── data_loader.py           # Moteur de données (parsing protobuf wire-format, extraction transcripts & artefacts)
+├── search_index.py          # Index de recherche plein-texte SQLite FTS5 (search_index.db, gitignoré)
 ├── config.py                # Persistance de configuration (config.json, gestion sys.frozen)
 ├── run.bat                  # Lanceur direct sous Windows (auto-détection .venv)
 ├── build.bat                # Raccourci Windows pour déclencher la compilation
@@ -28,7 +29,8 @@ Antigravity_ProjectManagment/
 ├── scripts/
 │   └── release.ps1          # Automatisation du versioning MAJOR.MINOR et tags Git
 ├── requirements.txt         # Dépendances Python (customtkinter, pyinstaller)
-├── .gitignore               # Exclusions Git (.venv, build, dist, *.spec, config.json)
+├── .gitignore               # Exclusions Git (.venv, build, dist, *.spec, config.json, search_index.db*)
+├── .gitattributes           # Normalisation des fins de ligne (LF/CRLF selon type)
 ├── README.md                # Documentation utilisateur
 ├── echange_IA.md            # Spécifications & historique des choix techniques
 └── AGENT.md                 # Règles & directives d'ingénierie pour les agents IA

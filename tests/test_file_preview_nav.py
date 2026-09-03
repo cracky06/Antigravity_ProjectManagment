@@ -248,3 +248,61 @@ def test_focus_global_search_selects_all(win):
     win.search_input.setText("abc")
     win._focus_global_search()
     assert win.search_input.hasSelectedText() is True
+
+
+# ---------------------------------------------------------------------------
+# Find bar : compteur d'occurrences & surlignage (v1.5)
+# ---------------------------------------------------------------------------
+def _load_conv_with_text(win, text: str):
+    """Injecte un document HTML simple dans le chat_browser."""
+    win.selected_conv = _make_conv("cv-find")
+    win.chat_browser.setHtml(f"<html><body><pre>{text}</pre></body></html>")
+
+
+def test_find_counts_all_occurrences(win):
+    _load_conv_with_text(win, "alpha beta alpha gamma alpha delta")
+    win._show_find_bar()
+    win.find_input.setText("alpha")
+    win._recompute_find_matches()
+    assert len(win._find_positions) == 3
+    assert len(win.chat_browser.extraSelections()) == 3
+    assert win.find_result_label.text() == "0 / 3" or win.find_result_label.text() == "1 / 3"
+
+
+def test_find_navigation_wraps_and_updates_label(win):
+    _load_conv_with_text(win, "x TOKEN y TOKEN z TOKEN w")
+    win._show_find_bar()
+    win.find_input.setText("TOKEN")
+    win._on_find_text_changed()          # recompute + va au 1er
+    assert win.find_result_label.text() == "1 / 3"
+
+    win._find_next()
+    assert win.find_result_label.text() == "2 / 3"
+    win._find_next()
+    assert win.find_result_label.text() == "3 / 3"
+    win._find_next()                     # wrap -> 1
+    assert win.find_result_label.text() == "1 / 3"
+    win._find_prev()                     # wrap arrière -> 3
+    assert win.find_result_label.text() == "3 / 3"
+
+
+def test_find_no_match_shows_zero(win):
+    _load_conv_with_text(win, "hello world")
+    win._show_find_bar()
+    win.find_input.setText("absent")
+    win._on_find_text_changed()
+    assert win._find_positions == []
+    assert win.find_result_label.text() == "0 résultat"
+
+
+def test_hide_find_bar_clears_highlight(win):
+    _load_conv_with_text(win, "match match match")
+    win._show_find_bar()
+    win.find_input.setText("match")
+    win._recompute_find_matches()
+    assert win.chat_browser.extraSelections()
+
+    win._hide_find_bar()
+    assert win.chat_browser.extraSelections() == []
+    assert win._find_positions == []
+    assert win._find_current == -1

@@ -7,12 +7,13 @@ un rendu HTML/CSS riche pour le chat (QTextBrowser), et la gestion complète des
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QSize, QUrl, QTimer
-from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut, QTextDocument
+from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QObject, QRunnable, QThreadPool, pyqtSignal as _Signal
+from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -60,6 +61,7 @@ from data_loader import (
     get_paths,
     _find_brain_path,
 )
+import search_index
 
 try:
     import markdown
@@ -209,6 +211,26 @@ QLineEdit#searchInput {
 }
 QLineEdit#searchInput:focus {
     border-color: #60a5fa;
+}
+QLineEdit#searchInput[queryError="true"] {
+    border-color: #ef4444;
+}
+QPushButton#searchModeBtn {
+    background-color: #27272a;
+    border: 1px solid #3f3f46;
+    border-radius: 6px;
+    color: #a1a1aa;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    padding: 4px 0;
+}
+QPushButton#searchModeBtn:hover {
+    border-color: #52525b;
+}
+QPushButton#searchModeBtn:checked {
+    background-color: #1d4ed8;
+    border-color: #3b82f6;
+    color: #ffffff;
 }
 
 /* Barre de recherche locale (find bar) */
@@ -367,6 +389,26 @@ QLineEdit#searchInput {
 QLineEdit#searchInput:focus {
     border-color: #2563eb;
 }
+QLineEdit#searchInput[queryError="true"] {
+    border-color: #dc2626;
+}
+QPushButton#searchModeBtn {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #64748b;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    padding: 4px 0;
+}
+QPushButton#searchModeBtn:hover {
+    border-color: #94a3b8;
+}
+QPushButton#searchModeBtn:checked {
+    background-color: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+}
 
 /* Barre de recherche locale (find bar) */
 QFrame#findBar {
@@ -416,6 +458,110 @@ class _FindLineEdit(QLineEdit):
 
 
 # =====================================================================
+# Recherche globale asynchrone (thread pool)
+# =====================================================================
+class _SearchSignals(QObject):
+    """Signaux d'un _SearchRunnable (QRunnable ne peut pas hériter de QObject)."""
+
+    finished = _Signal(int, set)     # (generation, set[conv_id])
+    failed = _Signal(int, str)       # (generation, message d'erreur)
+
+
+class _SearchRunnable(QRunnable):
+    """Exécute une recherche dans l'index sur un thread du pool.
+
+    `generation` identifie la requête ; la fenêtre ignore tout résultat dont la
+    génération n'est plus la dernière (frappe plus récente).
+    """
+
+    def __init__(
+        self,
+        generation: int,
+        query: str,
+        mode: str,
+        scope_ids: set[str] | None,
+        index_ready: bool,
+    ):
+        super().__init__()
+        self.signals = _SearchSignals()
+        self._generation = generation
+        self._query = query
+        self._mode = mode
+        self._scope_ids = scope_ids
+        self._index_ready = index_ready
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            if self._index_ready:
+                found = search_index.search(
+                    self._query, mode=self._mode, conv_ids=self._scope_ids
+                )
+            else:
+                # Repli : l'index n'est pas encore utilisable, on parse à la volée
+                # (uniquement le mode « contient » et « regex » — « mots » exige
+                # l'index FTS).
+                found = _fallback_search(self._query, self._mode, self._scope_ids)
+        except re.error as exc:
+            self.signals.failed.emit(self._generation, f"Regex invalide : {exc}")
+            return
+        except Exception as exc:  # pragma: no cover - garde-fou
+            self.signals.failed.emit(self._generation, f"Échec de la recherche : {exc}")
+            return
+        finally:
+            search_index.close_thread_connection()
+        self.signals.finished.emit(self._generation, found)
+
+
+def _fallback_search(query: str, mode: str, scope_ids: set[str] | None) -> set[str]:
+    """Recherche sans index : itère les conversations et parse leurs transcripts.
+
+    Utilisé tant que l'index n'est pas prêt/valide. Le mode « mots » retombe
+    sur « contient ».
+    """
+    from data_loader import load_chat_messages as _load
+
+    ids = scope_ids
+    if ids is None:
+        return set()  # portée inconnue hors index -> l'appelant fournit toujours scope_ids ici
+    rx = re.compile(query, re.IGNORECASE | re.MULTILINE) if mode == "regex" else None
+    needle = query.lower()
+    out: set[str] = set()
+    for cid in ids:
+        body = "\n".join(m.get("text", "") for m in _load(cid) if m.get("text"))
+        if rx is not None:
+            if rx.search(body):
+                out.add(cid)
+        elif needle in body.lower():
+            out.add(cid)
+    return out
+
+
+class _IndexSyncSignals(QObject):
+    finished = _Signal(int, int, bool, str)  # (updated, deleted, ok, message)
+
+
+class _IndexSyncRunnable(QRunnable):
+    """Synchronise (ou reconstruit) l'index en tâche de fond au démarrage."""
+
+    def __init__(self, convs: list, rebuild: bool = False):
+        super().__init__()
+        self.signals = _IndexSyncSignals()
+        self._convs = convs
+        self._rebuild = rebuild
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            fn = search_index.rebuild_index if self._rebuild else search_index.sync_index
+            updated, deleted = fn(self._convs)
+            status = search_index.check_status()
+            self.signals.finished.emit(updated, deleted, status.ok, status.message)
+        except Exception as exc:  # pragma: no cover - garde-fou
+            self.signals.finished.emit(0, 0, False, f"Échec de l'indexation : {exc}")
+        finally:
+            search_index.close_thread_connection()
+
+
+# =====================================================================
 # Boîte de Dialogue des Paramètres (PyQt6)
 # =====================================================================
 class SettingsDialog(QDialog):
@@ -423,7 +569,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.on_save_callback = on_save_callback
         self.setWindowTitle("Paramètres — Dossiers sources & Thème")
-        self.setFixedSize(560, 320)
+        self.setFixedSize(560, 372)
         self.setModal(True)
 
         is_dark = get_active_theme() == "dark"
@@ -477,6 +623,24 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(self.theme_combo)
 
+        # 4. Index de recherche plein-texte
+        idx_row = QHBoxLayout()
+        try:
+            _st = search_index.check_status()
+            _idx_txt = _st.message
+        except Exception as exc:  # pragma: no cover
+            _idx_txt = f"état inconnu ({exc})"
+        self._idx_status_label = QLabel(f"Index de recherche : {_idx_txt}")
+        self._idx_status_label.setStyleSheet(
+            "color: #a1a1aa; font-size: 11px;" if is_dark else "color: #64748b; font-size: 11px;"
+        )
+        idx_row.addWidget(self._idx_status_label, 1)
+        btn_reindex = QPushButton("Réindexer")
+        btn_reindex.setToolTip("Reconstruire entièrement l'index de recherche plein-texte")
+        btn_reindex.clicked.connect(self._trigger_reindex)
+        idx_row.addWidget(btn_reindex)
+        layout.addLayout(idx_row)
+
         layout.addSpacing(10)
 
         # Boutons
@@ -521,6 +685,13 @@ class SettingsDialog(QDialog):
     def _open_changelog(self):
         dlg = ChangelogDialog(self)
         dlg.show()
+
+    def _trigger_reindex(self):
+        """Demande à la fenêtre principale de reconstruire l'index."""
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "rebuild_search_index"):
+            parent.rebuild_search_index()
+            self._idx_status_label.setText("Index de recherche : reconstruction lancée…")
 
     def _save(self):
         cfg = load_config()
@@ -662,14 +833,30 @@ class AntigravityManagerWindow(QMainWindow):
         self._file_view_active: bool = False
         self._file_view_return_conv: ConversationInfo | None = None
 
+        # Recherche locale (find bar) : positions de toutes les occurrences dans
+        # le document courant + index de l'occurrence active.
+        self._find_positions: list[int] = []
+        self._find_current: int = -1
+
         # Timer debounce pour la recherche globale (400ms)
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(self._do_search)
 
+        # Recherche asynchrone : pool de threads + compteur de génération pour
+        # ignorer les résultats périmés, + état de l'index plein-texte.
+        self._thread_pool = QThreadPool.globalInstance()
+        self._search_generation = 0
+        self._index_ready = False
+        self._index_syncing = False
+        self._shutting_down = False
+        # Références fortes aux runnables en vol (sinon leurs QObject de signaux
+        # peuvent être collectés avant l'émission -> RuntimeError).
+        self._active_runnables: set = set()
+
         self._apply_theme()
         self._build_ui()
-        self.reload_data()
+        self.reload_data()  # déclenche aussi _kick_off_index_sync()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -679,6 +866,17 @@ class AntigravityManagerWindow(QMainWindow):
             set_last_seen_version(self.version)
             self.changelog_dialog = ChangelogDialog(self)
             self.changelog_dialog.show()
+
+    def closeEvent(self, event):
+        """Attend la fin des tâches d'arrière-plan avant de fermer, pour éviter
+        qu'un runnable n'émette un signal vers un widget déjà détruit."""
+        self._shutting_down = True
+        self._search_generation += 1  # invalide toute recherche en vol
+        try:
+            self._thread_pool.waitForDone(3000)
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     def _apply_theme(self):
         app = QApplication.instance()
@@ -735,13 +933,36 @@ class AntigravityManagerWindow(QMainWindow):
 
         sidebar_layout.addLayout(sb_header)
 
-        # Champ de recherche globale (au-dessus du filtre projet)
+        # Champ de recherche globale (au-dessus du filtre projet) + toggles de mode
+        search_row = QHBoxLayout()
+        search_row.setSpacing(4)
+
         self.search_input = QLineEdit()
         self.search_input.setObjectName("searchInput")
         self.search_input.setPlaceholderText("🔍  Rechercher dans les discussions…")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_search_text_changed)
-        sidebar_layout.addWidget(self.search_input)
+        search_row.addWidget(self.search_input)
+
+        # [.*] : mode expression régulière
+        self.btn_mode_regex = QPushButton(".*")
+        self.btn_mode_regex.setObjectName("searchModeBtn")
+        self.btn_mode_regex.setCheckable(True)
+        self.btn_mode_regex.setFixedWidth(30)
+        self.btn_mode_regex.setToolTip("Recherche par expression régulière")
+        self.btn_mode_regex.toggled.connect(self._on_search_mode_toggled)
+        search_row.addWidget(self.btn_mode_regex)
+
+        # [Ab] : mode « mots » (index FTS, tolérant aux accents / préfixes)
+        self.btn_mode_words = QPushButton("Ab")
+        self.btn_mode_words.setObjectName("searchModeBtn")
+        self.btn_mode_words.setCheckable(True)
+        self.btn_mode_words.setFixedWidth(30)
+        self.btn_mode_words.setToolTip("Recherche par mots entiers (index plein-texte)")
+        self.btn_mode_words.toggled.connect(self._on_search_mode_toggled)
+        search_row.addWidget(self.btn_mode_words)
+
+        sidebar_layout.addLayout(search_row)
 
         # Filtre par projet
         self.project_filter_combo = QComboBox()
@@ -924,7 +1145,6 @@ class AntigravityManagerWindow(QMainWindow):
         self._apply_theme()
         projects_root, _, _, _, _ = get_paths()
         self.status_bar.showMessage("Chargement des données Antigravity…")
-        QApplication.processEvents()
 
         self.project_convs, self.all_convs = build_project_map()
 
@@ -973,6 +1193,61 @@ class AntigravityManagerWindow(QMainWindow):
         total_p = len(self.project_convs)
         total_c = len(self.all_convs)
         self.status_bar.showMessage(f"Racine : {projects_root} | {total_p} projets — {total_c} conversations")
+
+        # Après un rechargement manuel, resynchroniser l'index en tâche de fond.
+        if hasattr(self, "_thread_pool"):
+            self._kick_off_index_sync()
+
+    # -----------------------------------------------------------------
+    # Index plein-texte : synchronisation & santé
+    # -----------------------------------------------------------------
+    def _kick_off_index_sync(self, rebuild: bool = False):
+        """Lance (en tâche de fond) la synchro de l'index de recherche."""
+        if self._index_syncing or not self.all_convs:
+            return
+        status = search_index.check_status()
+        if status.corrupt and not rebuild:
+            self.status_bar.showMessage(
+                f"⚠️ {status.message} — reconstruction automatique de l'index…", 6000
+            )
+            rebuild = True
+
+        self._index_syncing = True
+        self._index_ready = status.ok and not status.corrupt
+        runnable = _IndexSyncRunnable(list(self.all_convs), rebuild=rebuild)
+        self._active_runnables.add(runnable)
+        runnable.signals.finished.connect(self._on_index_sync_finished)
+        runnable.signals.finished.connect(lambda *_: self._active_runnables.discard(runnable))
+        self._thread_pool.start(runnable)
+
+    def _on_index_sync_finished(self, updated: int, deleted: int, ok: bool, message: str):
+        if self._shutting_down:
+            return
+        self._index_syncing = False
+        self._index_ready = ok
+        if ok:
+            if updated or deleted:
+                self.status_bar.showMessage(
+                    f"✅ Index à jour ({updated} indexée(s), {deleted} retirée(s)). {message}",
+                    5000,
+                )
+            # Si une recherche « mots » attend l'index, la relancer maintenant.
+            if self.btn_mode_words.isChecked() and self.search_input.text().strip():
+                self._do_search()
+        else:
+            self.status_bar.showMessage(
+                f"⚠️ Index indisponible : {message} — recherche en mode dégradé.", 8000
+            )
+
+    def rebuild_search_index(self):
+        """Action utilisateur : reconstruction complète de l'index."""
+        if self._index_syncing:
+            self.status_bar.showMessage("Indexation déjà en cours…", 3000)
+            return
+        search_index.drop_index()
+        self._index_ready = False
+        self.status_bar.showMessage("Reconstruction de l'index de recherche…", 4000)
+        self._kick_off_index_sync(rebuild=True)
 
     def _populate_tree(self):
         self.tree.clear()
@@ -1673,25 +1948,94 @@ class AntigravityManagerWindow(QMainWindow):
             return
         self._search_timer.start(400)
 
+    def _current_search_mode(self) -> str:
+        """Mode actif d'après les toggles : 'regex' > 'words' > 'substring'."""
+        if self.btn_mode_regex.isChecked():
+            return "regex"
+        if self.btn_mode_words.isChecked():
+            return "words"
+        return "substring"
+
+    def _on_search_mode_toggled(self, _checked: bool = False):
+        """Un toggle de mode a changé : les deux sont mutuellement exclusifs,
+        puis on relance la recherche courante."""
+        sender = self.sender()
+        if sender is self.btn_mode_regex and self.btn_mode_regex.isChecked():
+            self.btn_mode_words.setChecked(False)
+        elif sender is self.btn_mode_words and self.btn_mode_words.isChecked():
+            self.btn_mode_regex.setChecked(False)
+
+        # « mots » exige l'index FTS ; si indisponible on prévient, sans bloquer.
+        if self.btn_mode_words.isChecked() and not self._index_ready:
+            self.status_bar.showMessage(
+                "Mode « mots » : l'index plein-texte n'est pas encore prêt, "
+                "repli temporaire sur « contient ».", 5000
+            )
+        if self.search_input.text().strip():
+            self._search_timer.start(200)
+
     def _do_search(self):
-        """Lance la recherche dans le périmètre filtré (respecte le filtre projet actif)."""
+        """Lance une recherche asynchrone dans le périmètre du filtre projet actif."""
         query = self.search_input.text().strip()
         if not query:
             return
+
+        mode = self._current_search_mode()
+        # Repli si « mots » demandé sans index : on rétrograde en « contient ».
+        effective_mode = mode
+        if mode == "words" and not self._index_ready:
+            effective_mode = "substring"
+
         scope = self._get_search_scope()
-        self.status_bar.showMessage(f"🔍 Recherche de « {query} » dans {len(scope)} conversation(s)…")
-        QApplication.processEvents()
+        self._search_scope_by_id = {c.conv_id: c for c in scope}
+        scope_ids = set(self._search_scope_by_id.keys())
 
+        self._search_generation += 1
+        gen = self._search_generation
+        self._set_query_error(False)
+        self.status_bar.showMessage(
+            f"🔍 Recherche ({self._mode_label(mode)}) de « {query} » "
+            f"dans {len(scope_ids)} conversation(s)…"
+        )
+
+        runnable = _SearchRunnable(gen, query, effective_mode, scope_ids, self._index_ready)
+        self._active_runnables.add(runnable)
+        runnable.signals.finished.connect(self._on_search_finished)
+        runnable.signals.failed.connect(self._on_search_failed)
+        runnable.signals.finished.connect(lambda *_: self._active_runnables.discard(runnable))
+        runnable.signals.failed.connect(lambda *_: self._active_runnables.discard(runnable))
+        self._thread_pool.start(runnable)
+
+    @staticmethod
+    def _mode_label(mode: str) -> str:
+        return {"regex": "regex", "words": "mots", "substring": "contient"}.get(mode, mode)
+
+    def _set_query_error(self, is_error: bool):
+        """Bordure rouge du champ de recherche (motif regex invalide)."""
+        self.search_input.setProperty("queryError", "true" if is_error else "false")
+        self.search_input.style().unpolish(self.search_input)
+        self.search_input.style().polish(self.search_input)
+
+    def _on_search_failed(self, generation: int, message: str):
+        if self._shutting_down or generation != self._search_generation:
+            return
+        self._set_query_error("regex" in message.lower())
+        self.status_bar.showMessage(f"⚠️ {message}", 6000)
+
+    def _on_search_finished(self, generation: int, found_ids: set):
+        if self._shutting_down or generation != self._search_generation:
+            return  # résultat périmé (frappe plus récente) ou fermeture en cours
+
+        scope_map = getattr(self, "_search_scope_by_id", {})
         results: dict[str, list[ConversationInfo]] = {}
-        for i, c_info in enumerate(scope):
-            if i % 5 == 0:
-                QApplication.processEvents()
-            messages = load_chat_messages(c_info.conv_id)
-            found = any(query.lower() in msg.get("text", "").lower() for msg in messages)
-            if found:
-                key = c_info.project or "⚠️ Sans projet"
-                results.setdefault(key, []).append(c_info)
+        for cid in found_ids:
+            c_info = scope_map.get(cid)
+            if c_info is None:
+                continue
+            key = c_info.project or "⚠️ Sans projet"
+            results.setdefault(key, []).append(c_info)
 
+        query = self.search_input.text().strip()
         total_found = sum(len(v) for v in results.values())
         self.status_bar.showMessage(
             f"🔍 {total_found} conversation(s) trouvée(s) pour « {query} »"
@@ -1809,49 +2153,97 @@ class AntigravityManagerWindow(QMainWindow):
         """Masque la barre de recherche locale et remet le focus sur le navigateur."""
         self.find_bar.setVisible(False)
         self.find_result_label.setText("")
+        self.chat_browser.setExtraSelections([])
+        self._find_positions = []
+        self._find_current = -1
         self.chat_browser.setFocus()
 
     def _on_find_text_changed(self):
         """Réinitialise la recherche depuis le début quand le texte change."""
-        self._do_find_from_start()
+        self._recompute_find_matches()
+        if self._find_positions:
+            self._goto_find_match(0)
+        else:
+            self._update_find_label()
 
     def _do_find_from_start(self):
-        """Cherche depuis le début du document et met à jour le label de résultat."""
+        """Point d'entrée quand la find bar est (ré)affichée : recompte et va au 1er."""
+        self._recompute_find_matches()
+        if self._find_positions:
+            self._goto_find_match(0)
+        else:
+            self._update_find_label()
+
+    # -- Recherche locale : moteur de comptage & surlignage --------------
+    def _recompute_find_matches(self):
+        """Recense toutes les occurrences du terme et les surligne toutes."""
+        self._find_positions = []
+        self._find_current = -1
+        query = self.find_input.text()
+        if not query:
+            self.chat_browser.setExtraSelections([])
+            self._update_find_label()
+            return
+
+        doc = self.chat_browser.document()
+        is_dark = get_active_theme() == "dark"
+        hl = QColor("#7c5b12" if is_dark else "#fde68a")
+        selections = []
+        cursor = doc.find(query, 0)
+        while not cursor.isNull():
+            self._find_positions.append(cursor.selectionStart())
+            sel = self.chat_browser.ExtraSelection()
+            sel.cursor = cursor
+            sel.format.setBackground(hl)
+            selections.append(sel)
+            cursor = doc.find(query, cursor.selectionEnd())
+        self.chat_browser.setExtraSelections(selections)
+        self._update_find_label()
+
+    def _goto_find_match(self, index: int):
+        """Positionne la vue sur l'occurrence `index` (avec wrap) et l'indique."""
+        if not self._find_positions:
+            self._update_find_label()
+            return
+        n = len(self._find_positions)
+        index %= n
+        self._find_current = index
+        query = self.find_input.text()
+        cur = self.chat_browser.textCursor()
+        cur.setPosition(self._find_positions[index])
+        cur.movePosition(
+            cur.MoveOperation.Right, cur.MoveMode.KeepAnchor, len(query)
+        )
+        self.chat_browser.setTextCursor(cur)
+        self.chat_browser.ensureCursorVisible()
+        self._update_find_label()
+
+    def _update_find_label(self):
         query = self.find_input.text()
         if not query:
             self.find_result_label.setText("")
             return
-        cursor = self.chat_browser.textCursor()
-        cursor.movePosition(cursor.MoveOperation.Start)
-        self.chat_browser.setTextCursor(cursor)
-        found = self.chat_browser.find(query)
-        self.find_result_label.setText("Trouvé ✓" if found else "Aucun résultat")
+        n = len(self._find_positions)
+        if n == 0:
+            self.find_result_label.setText("0 résultat")
+            return
+        pos = self._find_current + 1 if self._find_current >= 0 else 1
+        self.find_result_label.setText(f"{pos} / {n}")
 
     def _find_next(self):
-        """Cherche l'occurrence suivante (avec wrap autour)."""
-        query = self.find_input.text()
-        if not query:
-            return
-        found = self.chat_browser.find(query)
-        if not found:
-            # Wrap : retour au début
-            cursor = self.chat_browser.textCursor()
-            cursor.movePosition(cursor.MoveOperation.Start)
-            self.chat_browser.setTextCursor(cursor)
-            self.chat_browser.find(query)
+        """Occurrence suivante (avec wrap autour)."""
+        if not self._find_positions:
+            self._recompute_find_matches()
+        if self._find_positions:
+            self._goto_find_match(self._find_current + 1)
 
     def _find_prev(self):
-        """Cherche l'occurrence précédente (avec wrap autour)."""
-        query = self.find_input.text()
-        if not query:
-            return
-        found = self.chat_browser.find(query, QTextDocument.FindFlag.FindBackward)
-        if not found:
-            # Wrap : aller à la fin
-            cursor = self.chat_browser.textCursor()
-            cursor.movePosition(cursor.MoveOperation.End)
-            self.chat_browser.setTextCursor(cursor)
-            self.chat_browser.find(query, QTextDocument.FindFlag.FindBackward)
+        """Occurrence précédente (avec wrap autour)."""
+        if not self._find_positions:
+            self._recompute_find_matches()
+        if self._find_positions:
+            start = self._find_current if self._find_current >= 0 else 0
+            self._goto_find_match(start - 1)
 
     # -----------------------------------------------------------------
     # Menus Contextuels (Clic Droit)

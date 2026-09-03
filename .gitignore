@@ -20,3 +20,4 @@ build/
 dist/
 *.spec
 
+search_index.db*
