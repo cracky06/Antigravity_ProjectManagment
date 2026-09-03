@@ -231,6 +231,49 @@ def sync_index(
     return updated, len(orphans)
 
 
+def touch_conversation(conv_id: str, project: str = "", title: str = "") -> bool:
+    """(Ré)indexe UNE conversation si son transcript a changé depuis l'index.
+
+    Appelée « au fil de l'eau » quand une conversation est consultée : garde
+    l'index frais sans attendre la synchro groupée. Retourne True si l'index a
+    été mis à jour, False s'il était déjà à jour (ou en cas d'échec bénin).
+    """
+    try:
+        conn = _connect()
+        mtime = _transcript_mtime(conv_id)
+        row = conn.execute(
+            "SELECT mtime FROM docs WHERE conv_id = ?", (conv_id,)
+        ).fetchone()
+        if row is not None and mtime > 0 and abs(row[0] - mtime) < 1e-6:
+            return False
+        body = _concat_body(conv_id)
+        conn.execute(
+            """
+            INSERT INTO docs(conv_id, mtime, project, title, body)
+            VALUES (:cid, :mtime, :project, :title, :body)
+            ON CONFLICT(conv_id) DO UPDATE SET
+                mtime=excluded.mtime, project=excluded.project,
+                title=excluded.title, body=excluded.body
+            """,
+            {
+                "cid": conv_id,
+                "mtime": mtime,
+                "project": project or "",
+                "title": title or "",
+                "body": body,
+            },
+        )
+        conn.commit()
+        return True
+    except Exception as exc:  # pragma: no cover - ne doit jamais gêner l'affichage
+        import logging
+
+        logging.getLogger("antigravity_manager").debug(
+            "touch_conversation(%s) : %s", conv_id, exc
+        )
+        return False
+
+
 def rebuild_index(
     convs: Iterable,
     progress_cb: ProgressCallback | None = None,

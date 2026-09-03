@@ -568,6 +568,30 @@ class _IndexSyncRunnable(QRunnable):
             search_index.close_thread_connection()
 
 
+class _TouchIndexRunnable(QRunnable):
+    """Indexe UNE conversation au fil de l'eau (quand elle est consultée).
+
+    Silencieux : pas de signal, l'index se met à jour en arrière-plan et la
+    prochaine recherche en profitera.
+    """
+
+    def __init__(self, conv_id: str, project: str, title: str):
+        super().__init__()
+        self._conv_id = conv_id
+        self._project = project
+        self._title = title
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            search_index.touch_conversation(
+                self._conv_id, project=self._project, title=self._title
+            )
+        except Exception:
+            pass
+        finally:
+            search_index.close_thread_connection()
+
+
 # =====================================================================
 # Boîte de Dialogue des Paramètres (PyQt6)
 # =====================================================================
@@ -1159,6 +1183,8 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_browser.setOpenLinks(False)
         self.chat_browser.setOpenExternalLinks(False)
         self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
+        self.chat_browser.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.chat_browser.customContextMenuRequested.connect(self._on_chat_context_menu)
         chat_layout.addWidget(self.chat_browser)
 
         self.splitter.addWidget(chat_container)
@@ -1517,6 +1543,14 @@ class AntigravityManagerWindow(QMainWindow):
         self.btn_toggle_raw.setVisible(True)
         self.btn_find_toggle.setVisible(True)
 
+        # Indexation au fil de l'eau : garde l'index de recherche frais pour
+        # cette conversation sans attendre la synchro groupée.
+        if not self._shutting_down and self._index_ready and not self._index_syncing:
+            r = _TouchIndexRunnable(
+                info.conv_id, info.project or "", info.title or ""
+            )
+            self._thread_pool.start(r)
+
         messages = load_chat_messages(info.conv_id)
         is_dark = get_active_theme() == "dark"
 
@@ -1859,6 +1893,58 @@ class AntigravityManagerWindow(QMainWindow):
                 self._show_file_content(local)
             return
         # Tout autre schéma : ignoré volontairement (aucune navigation du browser).
+
+    def _on_chat_context_menu(self, pos):
+        """Menu contextuel dans la vue discussion.
+
+        Sur un lien fichier : actions « copier le chemin » / « ouvrir le
+        dossier parent » / « révéler dans l'Explorateur ». Ailleurs : le menu
+        standard de QTextBrowser (copier la sélection, tout sélectionner).
+        """
+        href = self.chat_browser.anchorAt(pos)
+        menu = self.chat_browser.createStandardContextMenu(pos)
+
+        if href:
+            url = QUrl(href)
+            local: Path | None = None
+            if url.isLocalFile() or url.scheme().lower() == "file":
+                local = Path(url.toLocalFile())
+
+            menu.addSeparator()
+            act_copy = menu.addAction("📋 Copier le lien")
+            act_copy.triggered.connect(
+                lambda: QApplication.clipboard().setText(
+                    str(local) if local is not None else href
+                )
+            )
+            if local is not None:
+                act_open_parent = menu.addAction("📂 Ouvrir le dossier parent")
+                act_open_parent.triggered.connect(
+                    lambda: self._open_parent_folder(local)
+                )
+                if sys.platform == "win32":
+                    act_reveal = menu.addAction("🔎 Révéler dans l'Explorateur")
+                    act_reveal.triggered.connect(lambda: self._reveal_in_explorer(local))
+
+        menu.exec(self.chat_browser.viewport().mapToGlobal(pos))
+
+    def _open_parent_folder(self, path: Path):
+        parent = path.parent
+        if parent.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(parent)))
+        else:
+            self.status_bar.showMessage(f"⚠️ Dossier introuvable : {parent}", 5000)
+
+    def _reveal_in_explorer(self, path: Path):
+        """Ouvre l'Explorateur avec le fichier pré-sélectionné (Windows)."""
+        import subprocess
+        try:
+            if path.exists():
+                subprocess.run(["explorer", "/select,", str(path)], check=False)
+            else:
+                self._open_parent_folder(path)
+        except Exception as exc:
+            self.status_bar.showMessage(f"⚠️ {exc}", 5000)
 
     def _show_file_content(self, path: Path) -> None:
         """Affiche le contenu texte de `path` dans la vue discussion.
@@ -2607,21 +2693,102 @@ class AntigravityManagerWindow(QMainWindow):
 # =====================================================================
 # Point d'entrée de l'application
 # =====================================================================
+def _crash_log_path() -> Path:
+    """Chemin de crash.log : à côté du .exe (frozen) ou du script (dev)."""
+    base = (
+        Path(sys.executable).resolve().parent
+        if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent
+    )
+    return base / "crash.log"
+
+
+def _append_crash_log(header: str, body: str) -> None:
+    """Ajoute une entrée horodatée à crash.log (append, pas d'écrasement)."""
+    import datetime
+    try:
+        with _crash_log_path().open("a", encoding="utf-8") as fh:
+            fh.write(f"\n[{datetime.datetime.now()}] {header}\n{body}\n")
+    except Exception:
+        pass
+
+
+def _install_global_excepthooks() -> None:
+    """Capture les exceptions non gérées — y compris celles levées DANS les
+    slots Qt (clics, timers, threads worker) que la boucle d'événements avale
+    normalement en silence — et les écrit dans crash.log.
+
+    Ne bloque jamais l'application : on logue puis on laisse le comportement
+    par défaut suivre son cours.
+    """
+    import traceback
+
+    _prev_hook = sys.excepthook
+
+    def _hook(exc_type, exc_value, exc_tb):
+        if not issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+            _append_crash_log(
+                "EXCEPTION NON GÉRÉE",
+                "".join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+            )
+        try:
+            _prev_hook(exc_type, exc_value, exc_tb)
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+    # threading.excepthook : exceptions dans les threads Python (dont QRunnable
+    # exécutés par QThreadPool passent par le C++ Qt, mais un thread pur Python
+    # y transiterait).
+    try:
+        import threading
+
+        def _thread_hook(args):
+            _append_crash_log(
+                f"EXCEPTION THREAD ({args.thread.name})",
+                "".join(
+                    traceback.format_exception(
+                        args.exc_type, args.exc_value, args.exc_traceback
+                    )
+                ),
+            )
+
+        threading.excepthook = _thread_hook
+    except Exception:
+        pass
+
+    # Messages du moteur Qt (qWarning / qCritical / qFatal) : on ne garde que
+    # les niveaux sérieux pour ne pas polluer le log.
+    try:
+        from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
+
+        def _qt_handler(mode, context, message):
+            if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+                loc = ""
+                if context and context.file:
+                    loc = f" ({context.file}:{context.line})"
+                _append_crash_log(f"QT {mode.name}{loc}", message)
+
+        qInstallMessageHandler(_qt_handler)
+    except Exception:
+        pass
+
+
 def main():
     import traceback
     import datetime
 
-    # Chemin du log d'erreur : à côté du .exe (frozen) ou du script (dev)
-    _log_path = (
-        Path(sys.executable).resolve().parent / "crash.log"
-        if getattr(sys, "frozen", False)
-        else Path(__file__).resolve().parent / "crash.log"
-    )
-    # Marqueur de démarrage (confirme que main() est bien atteinte)
+    _log_path = _crash_log_path()
+    # Marqueur de démarrage (confirme que main() est bien atteinte).
     try:
-        _log_path.write_text(f"[{datetime.datetime.now()}] main() démarrée\n", encoding="utf-8")
+        _log_path.write_text(
+            f"[{datetime.datetime.now()}] main() démarrée\n", encoding="utf-8"
+        )
     except Exception:
         pass
+
+    _install_global_excepthooks()
 
     if sys.platform == "win32":
         try:
@@ -2648,14 +2815,7 @@ def main():
     except SystemExit:
         raise  # Sortie normale, ne pas loguer
     except Exception:
-        err = traceback.format_exc()
-        try:
-            _log_path.write_text(
-                f"[{datetime.datetime.now()}] CRASH:\n{err}",
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
+        _append_crash_log("CRASH (démarrage)", traceback.format_exc())
         raise
 
 

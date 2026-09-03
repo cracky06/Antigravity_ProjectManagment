@@ -160,6 +160,17 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.2": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Menu contextuel (clic droit) sur les liens de fichiers dans la vue discussion : copier le lien, ouvrir le dossier parent, révéler dans l'Explorateur",
+                "Export Markdown : les liens vers des fichiers absolus sont rendus portables — chemin relatif au projet s'ils sont dedans, sinon simple code (le document reste valide même déplacé)",
+                "L'index de recherche se met à jour au fil de l'eau lorsqu'une conversation est consultée (plus besoin d'attendre la synchronisation groupée)",
+            ],
+            "🛡️ Robustesse (fix)": [
+                "Capture globale des exceptions non gérées, y compris celles levées dans les gestionnaires d'événements Qt (clics, minuteries) auparavant avalées silencieusement : elles sont ajoutées à crash.log",
+                "crash.log est désormais alimenté en mode ajout (les incidents successifs ne s'écrasent plus)",
+            ],
+        },
         "v2.1": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Export Markdown : les images générées sont désormais placées directement dans l'échange auquel elles correspondent, au lieu d'être toutes reléguées en fin de document",

@@ -1158,6 +1158,42 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return (s[:max_len].strip("-") or "conversation")
 
 
+# Liens Markdown pointant vers un fichier local absolu : [texte](file:///…)
+# ou [texte](C:/… / C:\…). On les neutralise dans l'export (chemin qui casse
+# si le projet est déplacé).
+_MD_FILE_LINK_RE = re.compile(
+    r"\[([^\]]+)\]\(\s*(?:file:///)?([A-Za-z]:[\\/][^)\s]+)\s*\)"
+)
+
+
+def _sanitize_message_text(text: str, project_root: Path | None) -> str:
+    """Rend le texte d'un message portable pour un export archivé.
+
+    Un lien `[config.py](file:///E:/Dev/Projet/config.py)` devient :
+      - `[config.py](config.py)` si le chemin est SOUS `project_root` ;
+      - `` `config.py` `` (code inline) sinon.
+    """
+    if not text or "](" not in text:
+        return text
+
+    root_str = ""
+    if project_root is not None:
+        try:
+            root_str = str(project_root.resolve()).replace("\\", "/").rstrip("/").lower()
+        except OSError:
+            root_str = str(project_root).replace("\\", "/").rstrip("/").lower()
+
+    def _repl(m: "re.Match[str]") -> str:
+        label, raw_path = m.group(1), m.group(2)
+        norm = raw_path.replace("\\", "/")
+        if root_str and norm.lower().startswith(root_str + "/"):
+            rel = norm[len(root_str) + 1:]
+            return f"[{label}]({rel})"
+        return f"`{label}`"
+
+    return _MD_FILE_LINK_RE.sub(_repl, text)
+
+
 def build_conversation_markdown(
     conv_id: str,
     title: str = "",
@@ -1198,6 +1234,14 @@ def build_conversation_markdown(
 
     messages = load_chat_messages(conv_id)
 
+    # Racine du projet cible (pour rendre les liens fichiers portables).
+    project_root: Path | None = None
+    if project:
+        try:
+            project_root = get_projects_root() / project
+        except Exception:
+            project_root = None
+
     # Corrélation image -> instant de génération (via les lignes GENERATE_IMAGE
     # du transcript, même référentiel que les messages).
     gen_times = _image_generation_times(conv_id) if images else {}
@@ -1228,7 +1272,11 @@ def build_conversation_markdown(
             head = f"### {role}" + (f"  ·  {ts}" if ts else "")
             lines.append(head)
             lines.append("")
-            lines.append((msg.get("text", "") or "").rstrip())
+            lines.append(
+                _sanitize_message_text(
+                    (msg.get("text", "") or "").rstrip(), project_root
+                )
+            )
             lines.append("")
 
             # Prochain message horodaté après celui-ci -> borne haute.
