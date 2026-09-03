@@ -886,11 +886,22 @@ class AntigravityManagerWindow(QMainWindow):
 
         self.splitter.addWidget(chat_container)
 
-        # Raccourci clavier : Ctrl+F → ouvrir la find bar
-        # Stocké en attribut d'instance pour éviter le garbage-collection Python
-        self._shortcut_find = QShortcut(QKeySequence("Ctrl+F"), self)
-        self._shortcut_find.activated.connect(self._show_find_bar)
-        # Note : Escape est géré directement par _FindLineEdit (voir classe dédiée)
+        # Raccourcis clavier — stockés en attributs d'instance pour éviter le
+        # garbage-collection Python des objets QShortcut.
+        # Note : Échap dans la find bar est géré par _FindLineEdit (classe dédiée).
+        self._shortcuts: list[QShortcut] = []
+
+        def _add_shortcut(sequence: str, slot) -> None:
+            sc = QShortcut(QKeySequence(sequence), self)
+            sc.activated.connect(slot)
+            self._shortcuts.append(sc)
+
+        _add_shortcut("Ctrl+F", self._show_find_bar)          # find bar locale
+        _add_shortcut("Ctrl+K", self._focus_global_search)    # recherche globale
+        _add_shortcut("Ctrl+L", self._focus_global_search)    # alias
+        _add_shortcut("F3", self._find_next)                  # occurrence suivante
+        _add_shortcut("Shift+F3", self._find_prev)            # occurrence précédente
+        _add_shortcut("Escape", self._on_escape)             # effacer recherche / fermer find bar
 
         # Proportions initiales : 340px sidebar, reste pour le chat
         self.splitter.setSizes([340, 920])
@@ -1773,6 +1784,26 @@ class AntigravityManagerWindow(QMainWindow):
             self._hide_find_bar()
         else:
             self._show_find_bar()
+
+    def _focus_global_search(self):
+        """Ctrl+K / Ctrl+L : place le focus dans le champ de recherche globale."""
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def _on_escape(self):
+        """Échap : ferme la find bar si visible, sinon efface la recherche globale.
+
+        Échap à l'intérieur du champ de la find bar est déjà intercepté par
+        _FindLineEdit ; ce raccourci couvre le cas où le focus est ailleurs
+        (arbre, navigateur de chat).
+        """
+        # isVisibleTo(self) reflète l'intention (setVisible) même si la fenêtre
+        # n'est pas encore montrée — plus fiable que isVisible() ici.
+        if self.find_bar.isVisibleTo(self):
+            self._hide_find_bar()
+        elif self.search_input.text():
+            self.search_input.clear()
+            self.tree.setFocus()
 
     def _hide_find_bar(self):
         """Masque la barre de recherche locale et remet le focus sur le navigateur."""

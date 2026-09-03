@@ -1,0 +1,22 @@
+# Normalisation des fins de ligne — évite les avertissements
+# « LF will be replaced by CRLF » à chaque commit sous Windows.
+
+# Par défaut : Git normalise en LF dans le dépôt, restitue selon la plateforme.
+* text=auto
+
+# Fichiers toujours en LF (lus/écrits par du code multiplateforme).
+VERSION            text eol=lf
+*.py               text eol=lf
+*.md               text eol=lf
+*.txt              text eol=lf
+.gitignore         text eol=lf
+.gitattributes     text eol=lf
+
+# Scripts Windows : CRLF (attendu par PowerShell / cmd historiquement).
+*.ps1              text eol=crlf
+*.bat              text eol=crlf
+
+# Binaires : jamais de conversion ni de diff textuel.
+*.ico              binary
+*.png              binary
+*.pb               binary

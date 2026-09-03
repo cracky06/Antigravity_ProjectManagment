@@ -33,12 +33,47 @@ Get-Process -Name "AntigravityManager" -ErrorAction SilentlyContinue | ForEach-O
     Start-Sleep -Milliseconds 300
 }
 
+function Remove-BuildDirectory {
+    <#
+        .SYNOPSIS
+            Supprime un dossier de build avec plusieurs tentatives.
+        .DESCRIPTION
+            dist/ et build/ sont fréquemment tenus quelques secondes par un
+            handle résiduel (fenêtre Explorateur, watcher de l'IDE, antivirus)
+            juste après la fermeture de l'exe. On réessaie avec un court délai
+            avant d'abandonner.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [int]$MaxAttempts = 6,
+        [int]$DelayMs = 1000
+    )
+
+    for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
+        if (-not (Test-Path -Path $Path)) { return }
+        try {
+            Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
+            return
+        }
+        catch {
+            if ($Attempt -eq $MaxAttempts) {
+                Write-Host "  ECHEC : '$Path' reste verrouille apres $MaxAttempts tentatives." -ForegroundColor Red
+                Write-Host "  Fermez toute fenetre de l'Explorateur ouverte dans ce dossier, puis relancez." -ForegroundColor Red
+                throw
+            }
+            Write-Host "  '$Path' verrouille (tentative $Attempt/$MaxAttempts), nouvelle tentative dans $([math]::Round($DelayMs/1000, 1))s..." -ForegroundColor DarkYellow
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+}
+
 $DirectoriesToClean = @("build", "dist")
 foreach ($Dir in $DirectoriesToClean) {
     $Target = Join-Path -Path $ScriptDir -ChildPath $Dir
     if (Test-Path -Path $Target) {
         Write-Host "  Suppression de $Dir..." -ForegroundColor Gray
-        Remove-Item -Path $Target -Recurse -Force
+        Remove-BuildDirectory -Path $Target
     }
 }
 

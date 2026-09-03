@@ -138,6 +138,16 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.4": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Raccourcis clavier : Ctrl+K / Ctrl+L (recherche globale), F3 / Maj+F3 (occurrence suivante / précédente), Échap (ferme la barre de recherche locale ou efface la recherche globale)",
+            ],
+            "🔧 Qualité & Outillage (chore)": [
+                "Couverture de tests étendue à 33 tests (aperçu de fichier, navigation ←, pile d'historique, raccourcis clavier)",
+                "Build-App.ps1 : suppression de build/ et dist/ avec réessais (contourne les verrous transitoires de l'Explorateur / de l'IDE)",
+                "Ajout d'un .gitattributes (fins de ligne normalisées, fin des avertissements « LF will be replaced by CRLF »)",
+            ],
+        },
         "v1.3": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Aperçu du contenu des fichiers référencés : un clic sur un lien fichier affiche son contenu directement dans la vue discussion (jamais d'exécution), avec coloration syntaxique Pygments (.py, .bat, .ps1, .json, .yaml…)",
