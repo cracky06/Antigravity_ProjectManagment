@@ -128,9 +128,9 @@ QTreeWidget {
     outline: none;
 }
 QTreeWidget::item {
-    padding: 5px 4px;
+    padding: 3px 4px;
     border-radius: 5px;
-    margin: 1px 4px;
+    margin: 0px 4px;
 }
 QTreeWidget::item:hover {
     background-color: #27272a;
@@ -305,9 +305,9 @@ QTreeWidget {
     outline: none;
 }
 QTreeWidget::item {
-    padding: 5px 4px;
+    padding: 3px 4px;
     border-radius: 5px;
-    margin: 1px 4px;
+    margin: 0px 4px;
 }
 QTreeWidget::item:hover {
     background-color: #e2e8f0;
@@ -1512,7 +1512,7 @@ class AntigravityManagerWindow(QMainWindow):
                 <p style="font-size: 12px; color: {sub_col};">Cette session correspond probablement à une sous-tâche technique (subagent)<br>ou ses journaux ont été archivés.</p>
             </div>
             """
-            self.chat_browser.setHtml(html)
+            self._set_chat_html(html)
             return
 
         # Couleurs selon le thème
@@ -1557,7 +1557,7 @@ class AntigravityManagerWindow(QMainWindow):
                     white-space: pre-wrap;
                 }}
             </style></head><body>{escaped_raw}</body></html>"""
-            self.chat_browser.setHtml(html)
+            self._set_chat_html(html)
             # Pré-remplir la find bar si recherche globale active
             self._prefill_find_from_search()
             return
@@ -1573,40 +1573,43 @@ class AntigravityManagerWindow(QMainWindow):
                     color: {body_col};
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
                     font-size: 13px;
-                    line-height: 1.6;
+                    line-height: 1.45;
                     margin: 0;
                     padding: 10px;
                 }}
                 .msg-container {{
-                    margin-bottom: 24px;
+                    margin-bottom: 14px;
                 }}
                 .user-box {{
                     background-color: {user_bg};
                     border: 1px solid {user_border};
                     border-radius: 8px;
-                    padding: 12px 16px;
-                    margin-bottom: 12px;
+                    padding: 8px 14px;
+                    margin-bottom: 8px;
                 }}
                 .user-header {{
                     font-weight: bold;
                     color: {user_title_col};
                     font-size: 12px;
-                    margin-bottom: 6px;
+                    line-height: 1.2;
+                    margin: 0 0 1px 0;
                     display: flex;
                     justify-content: space-between;
                 }}
                 .model-box {{
                     background-color: {model_bg};
                     border-left: 3px solid {model_border};
-                    padding: 4px 16px;
-                    margin-bottom: 16px;
+                    padding: 2px 14px;
+                    margin-bottom: 10px;
                 }}
                 .model-header {{
                     font-weight: bold;
                     color: {model_title_col};
                     font-size: 12px;
-                    margin-bottom: 6px;
+                    line-height: 1.2;
+                    margin: 0 0 1px 0;
                 }}
+                .msg-body {{ line-height: 1.4; }}
                 .time-tag {{
                     color: {time_col};
                     font-weight: normal;
@@ -1614,17 +1617,17 @@ class AntigravityManagerWindow(QMainWindow):
                     float: right;
                 }}
                 h1, h2, h3, h4 {{
-                    margin-top: 12px;
-                    margin-bottom: 6px;
+                    margin-top: 10px;
+                    margin-bottom: 4px;
                     color: {model_title_col};
                 }}
                 h1 {{ font-size: 16px; border-bottom: 1px solid {hr_col}; padding-bottom: 3px; }}
                 h2 {{ font-size: 15px; border-bottom: 1px solid {hr_col}; padding-bottom: 2px; }}
                 h3 {{ font-size: 14px; }}
                 h4 {{ font-size: 13px; }}
-                p {{ margin: 4px 0; }}
-                ul, ol {{ margin: 4px 0; padding-left: 20px; }}
-                li {{ margin-bottom: 2px; }}
+                p {{ margin: 2px 0; }}
+                ul, ol {{ margin: 2px 0; padding-left: 20px; }}
+                li {{ margin-bottom: 1px; }}
                 strong {{ font-weight: bold; }}
                 blockquote {{
                     border-left: 3px solid {model_border};
@@ -1720,12 +1723,23 @@ class AntigravityManagerWindow(QMainWindow):
                 )
                 formatted = escaped.replace("\n", "<br>")
 
+            # QTextBrowser ne gère pas « .msg-body > :first-child » : on retire
+            # nous-mêmes le <p> enveloppant d'un message d'un seul paragraphe
+            # pour que le texte colle au header (« Utilisateur » / « Antigravity »).
+            _stripped = formatted.strip()
+            if (
+                _stripped.startswith("<p>")
+                and _stripped.endswith("</p>")
+                and _stripped.count("<p>") == 1
+            ):
+                formatted = _stripped[3:-4]
+
             if role == "user":
                 html_parts.append(f"""
                 <div class="msg-container">
                     <div class="user-box">
                         <div class="user-header">👤 Utilisateur {time_html}</div>
-                        <div style="color: {user_text_col};">{formatted}</div>
+                        <div class="msg-body" style="color: {user_text_col};">{formatted}</div>
                     </div>
                 </div>
                 """)
@@ -1734,16 +1748,27 @@ class AntigravityManagerWindow(QMainWindow):
                 <div class="msg-container">
                     <div class="model-box">
                         <div class="model-header">✨ Antigravity {time_html}</div>
-                        <div style="color: {model_text_col};">{formatted}</div>
+                        <div class="msg-body" style="color: {model_text_col};">{formatted}</div>
                     </div>
                 </div>
                 """)
 
         html_parts.append("</body></html>")
         full_html = "".join(html_parts)
-        self.chat_browser.setHtml(full_html)
+        self._set_chat_html(full_html)
         # Pré-remplir la find bar si recherche globale active
         self._prefill_find_from_search()
+
+    def _set_chat_html(self, html: str):
+        """Charge le HTML dans le navigateur et remet le curseur au début SANS
+        sélection : sinon QTextBrowser ouvre le document avec le premier bloc
+        sélectionné (surlignage bleu parasite)."""
+        self.chat_browser.setHtml(html)
+        cur = self.chat_browser.textCursor()
+        cur.movePosition(QTextCursor.MoveOperation.Start)
+        cur.clearSelection()
+        self.chat_browser.setTextCursor(cur)
+        self.chat_browser.verticalScrollBar().setValue(0)
 
     def _clear_chat(self):
         self.selected_conv = None
@@ -1907,7 +1932,7 @@ class AntigravityManagerWindow(QMainWindow):
             {code_html}
         </body></html>"""
 
-        self.chat_browser.setHtml(html)
+        self._set_chat_html(html)
         self.chat_title.setText(f"📄 {path.name}")
         self.chat_meta.setText(f"Aperçu fichier — {path}")
         self.btn_back.setVisible(True)

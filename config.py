@@ -160,6 +160,13 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.9": {
+            "🎨 Identité Visuelle & Ergonomie (ui)": [
+                "Interlignage resserré dans la barre latérale (arborescence plus dense)",
+                "Vue discussion compactée : moins d'espace sous « Utilisateur » / « Antigravity », entre les messages et entre les paragraphes",
+                "Le curseur est remis en haut du document sans sélection à l'ouverture d'une discussion (plus de bloc pré-sélectionné au chargement)",
+            ],
+        },
         "v1.8": {
             "🐛 Corrections (fix)": [
                 "Barre de recherche locale : le surlignage des occurrences était décalé par rapport au texte réel (positions de la chaîne plate ≠ positions du document Qt)",
