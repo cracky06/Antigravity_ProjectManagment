@@ -421,6 +421,75 @@ def _find_transcript_file(conv_id: str) -> Path | None:
 # Cache mémoire pour chargement instantané des messages déjà consultés
 _CHAT_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
+# Cache : conv_id -> a un vrai dialogue (bool). Invalidé par mtime du transcript.
+_DIALOGUE_CACHE: dict[str, tuple[float, bool]] = {}
+
+
+def conversation_has_dialogue(conv_id: str) -> bool:
+    """Vrai si la session contient au moins un échange utilisateur/modèle.
+
+    Test rapide : on scanne le transcript à la recherche d'une ligne
+    `USER_INPUT` ou `PLANNER_RESPONSE`, sans tout parser. Les sous-tâches
+    techniques (exécution d'outils, sous-agents) n'en ont pas.
+    """
+    transcript = _find_transcript_file(conv_id)
+    if not transcript or not transcript.is_file():
+        return False
+    try:
+        mtime = transcript.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cached = _DIALOGUE_CACHE.get(conv_id)
+    if cached and cached[0] == mtime:
+        return cached[1]
+
+    has_dialogue = False
+    try:
+        with transcript.open(encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if '"USER_INPUT"' in line or '"PLANNER_RESPONSE"' in line:
+                    has_dialogue = True
+                    break
+    except OSError as exc:
+        logger.debug("conversation_has_dialogue(%s) : %s", conv_id, exc)
+
+    _DIALOGUE_CACHE[conv_id] = (mtime, has_dialogue)
+    return has_dialogue
+
+
+def _first_line_of_artifact(brain_path: Path) -> str:
+    """1re ligne utile de task.md puis walkthrough.md (titre Markdown nettoyé)."""
+    for fname in ("task.md", "walkthrough.md", "implementation_plan.md"):
+        f = brain_path / fname
+        if not f.is_file():
+            continue
+        try:
+            for raw in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                s = raw.strip().lstrip("#").strip()
+                if s:
+                    return s[:80]
+        except OSError:
+            continue
+    return ""
+
+
+def derive_conv_label(conv_id: str, title: str = "") -> str:
+    """Libellé d'affichage d'une conversation.
+
+    - titre officiel s'il existe ;
+    - sinon `<id8> — <1re ligne d'un artéfact>` si un artéfact est présent ;
+    - sinon `<id8>` seul.
+    """
+    if title:
+        return title
+    short = conv_id[:12]
+    brain_p = _find_brain_path(conv_id)
+    if brain_p and brain_p.is_dir():
+        line = _first_line_of_artifact(brain_p)
+        if line:
+            return f"{short} — {line}"
+    return short
+
 
 # -----------------------------------------------------------------
 # Chargement des messages d'une conversation pour le Chat Viewer
@@ -987,6 +1056,250 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
         del _CHAT_CACHE[conv_id]
 
     return True, f"Conversation déplacée vers « {target_project_name} » avec succès."
+
+
+# ---------------------------------------------------------------------------
+# Export Markdown d'une conversation
+# ---------------------------------------------------------------------------
+_MD_SLUG_RE = re.compile(r"[^\w\-]+", re.UNICODE)
+
+# Artéfacts du dossier brain joints en annexe de l'export.
+_EXPORT_ARTIFACTS = (
+    ("walkthrough.md", "Walkthrough & Synthèse"),
+    ("implementation_plan.md", "Plan d'implémentation"),
+    ("task.md", "Tâche"),
+)
+
+# Images d'une session : où chercher, et sous quel intitulé.
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg")
+_IMAGE_SOURCES = (
+    ("", "Images générées"),
+    (".tempmediaStorage", "Médias temporaires"),
+    (".user_uploaded", "Images fournies par l'utilisateur"),
+)
+
+
+def _collect_session_images(brain_path: Path) -> list[tuple[str, Path]]:
+    """Retourne [(label_de_section, chemin_fichier), …] pour toutes les images
+    d'une session, dans l'ordre : générées, temporaires, uploadées."""
+    out: list[tuple[str, Path]] = []
+    for sub, label in _IMAGE_SOURCES:
+        d = brain_path / sub if sub else brain_path
+        if not d.is_dir():
+            continue
+        try:
+            files = sorted(
+                p for p in d.iterdir()
+                if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+            )
+        except OSError as exc:
+            logger.warning("Lecture du dossier images %s échouée : %s", d, exc)
+            continue
+        for p in files:
+            out.append((label, p))
+    return out
+
+
+def _slugify(text: str, max_len: int = 60) -> str:
+    """Transforme un titre en fragment de nom de fichier sûr."""
+    s = _MD_SLUG_RE.sub("-", (text or "").strip()).strip("-")
+    return (s[:max_len].strip("-") or "conversation")
+
+
+def build_conversation_markdown(
+    conv_id: str,
+    title: str = "",
+    project: str = "",
+    images: list[tuple[str, str]] | None = None,
+) -> str:
+    """Construit le document Markdown complet d'une conversation.
+
+    En-tête (titre / projet / date / ID) + messages (### 👤 Utilisateur /
+    ### ✨ Antigravity) + annexe des artéfacts du dossier brain s'ils existent
+    + section « Images » si `images` est fourni.
+
+    `images` : liste de (label_section, chemin_relatif_dans_le_md) déjà résolue
+    par l'appelant (qui a copié les fichiers à côté du .md). Si None, la section
+    Images liste simplement les noms de fichiers présents dans le brain.
+    """
+    fallback_title, last_dt = get_transcript_info(conv_id)
+    disp_title = title or fallback_title or conv_id[:12]
+    date_str = last_dt.strftime("%Y-%m-%d %H:%M") if last_dt else "date inconnue"
+
+    lines: list[str] = [
+        f"# {disp_title}",
+        "",
+        f"- **Projet :** {project or '(aucun)'}",
+        f"- **Dernière activité :** {date_str}",
+        f"- **ID de session :** `{conv_id}`",
+        f"- **Exporté le :** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+        "---",
+        "",
+    ]
+
+    messages = load_chat_messages(conv_id)
+    if messages:
+        for msg in messages:
+            role = "👤 Utilisateur" if msg.get("role") == "user" else "✨ Antigravity"
+            ts = msg.get("timestamp", "")
+            head = f"### {role}" + (f"  ·  {ts}" if ts else "")
+            lines.append(head)
+            lines.append("")
+            lines.append((msg.get("text", "") or "").rstrip())
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+    else:
+        lines.append("_Aucun message textuel dans les journaux de cette session._")
+        lines.append("")
+
+    # Annexe : artéfacts du dossier brain.
+    brain_p = _find_brain_path(conv_id)
+    appended_any = False
+    if brain_p and brain_p.is_dir():
+        for fname, label in _EXPORT_ARTIFACTS:
+            fpath = brain_p / fname
+            if fpath.is_file():
+                try:
+                    content = fpath.read_text(encoding="utf-8", errors="ignore").strip()
+                except OSError as exc:
+                    logger.warning("Lecture artéfact %s échouée : %s", fpath, exc)
+                    continue
+                if not content:
+                    continue
+                if not appended_any:
+                    lines.append("## Annexe — Artéfacts de session")
+                    lines.append("")
+                    appended_any = True
+                lines.append(f"### {label} (`{fname}`)")
+                lines.append("")
+                lines.append(content)
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+
+    # Section Images.
+    if images:
+        # `images` fourni : fichiers déjà copiés, on les affiche.
+        lines.append("## Images")
+        lines.append("")
+        current_label = None
+        for label, rel_path in images:
+            if label != current_label:
+                lines.append(f"### {label}")
+                lines.append("")
+                current_label = label
+            name = Path(rel_path).name
+            lines.append(f"![{name}]({rel_path})")
+            lines.append("")
+        lines.append("---")
+        lines.append("")
+    elif brain_p and brain_p.is_dir():
+        # Pas de copie demandée : on liste au moins les noms trouvés.
+        found = _collect_session_images(brain_p)
+        if found:
+            lines.append("## Images")
+            lines.append("")
+            current_label = None
+            for label, fpath in found:
+                if label != current_label:
+                    lines.append(f"### {label}")
+                    lines.append("")
+                    current_label = label
+                lines.append(f"- 🖼️ `{fpath.name}`")
+            lines.append("")
+            lines.append("_(images non copiées — export texte seul)_")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _copy_session_images(brain_path: Path, dest_dir: Path) -> list[tuple[str, str]]:
+    """Copie toutes les images de la session dans `dest_dir` et retourne
+    [(label_section, chemin_relatif "images/<nom>"), …].
+
+    Les collisions de noms (même nom dans deux sous-dossiers) sont désambiguïsées
+    par un suffixe numérique.
+    """
+    found = _collect_session_images(brain_path)
+    if not found:
+        return []
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    used: set[str] = set()
+    result: list[tuple[str, str]] = []
+    for label, src in found:
+        name = src.name
+        if name in used:
+            stem, suf = src.stem, src.suffix
+            i = 2
+            while f"{stem}_{i}{suf}" in used:
+                i += 1
+            name = f"{stem}_{i}{suf}"
+        used.add(name)
+        try:
+            shutil.copy2(src, dest_dir / name)
+        except OSError as exc:
+            logger.warning("Copie image %s échouée : %s", src, exc)
+            continue
+        result.append((label, f"{dest_dir.name}/{name}"))
+    return result
+
+
+def default_export_filename(conv_id: str, title: str = "") -> str:
+    """Nom de fichier proposé : <date>_<titre-slug>_<id8>.md."""
+    fallback_title, last_dt = get_transcript_info(conv_id)
+    date_part = last_dt.strftime("%Y%m%d") if last_dt else "nodate"
+    slug = _slugify(title or fallback_title or conv_id[:12])
+    return f"{date_part}_{slug}_{conv_id[:8]}.md"
+
+
+def _write_export(conv_id: str, out_path: Path, title: str, project: str) -> tuple[bool, str]:
+    """Écrit le .md à `out_path` en copiant d'abord les images de la session
+    dans `<nom_du_md_sans_extension>_images/` à côté du fichier."""
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        brain_p = _find_brain_path(conv_id)
+        images: list[tuple[str, str]] = []
+        if brain_p and brain_p.is_dir():
+            img_dir = out_path.parent / f"{out_path.stem}_images"
+            # `_copy_session_images` renvoie déjà des chemins relatifs
+            # « <img_dir.name>/<nom> », directement utilisables depuis le .md.
+            images = _copy_session_images(brain_p, img_dir)
+        md = build_conversation_markdown(
+            conv_id, title=title, project=project, images=images or None
+        )
+        out_path.write_text(md, encoding="utf-8")
+        logger.debug(
+            "Conversation %s exportée -> %s (%d image(s))", conv_id, out_path, len(images)
+        )
+        n_img = len(images)
+        suffix = f" (+{n_img} image{'s' if n_img > 1 else ''})" if n_img else ""
+        return True, f"{out_path}{suffix}"
+    except Exception as exc:
+        logger.warning("Échec export vers %s pour %s : %s", out_path, conv_id, exc)
+        return False, f"Échec de l'export : {exc}"
+
+
+def export_conversation_to_project(
+    conv_id: str, project_name: str, title: str = ""
+) -> tuple[bool, str]:
+    """Écrit l'export dans `<racine projets>/<project_name>/_conversations/`."""
+    projects_root = get_projects_root()
+    out_path = (
+        projects_root / project_name / "_conversations"
+        / default_export_filename(conv_id, title)
+    )
+    return _write_export(conv_id, out_path, title, project_name)
+
+
+def export_conversation_to_path(
+    conv_id: str, out_path: str | Path, title: str = "", project: str = ""
+) -> tuple[bool, str]:
+    """Écrit l'export Markdown à l'emplacement `out_path` choisi par l'utilisateur."""
+    return _write_export(conv_id, Path(out_path), title, project)
 
 
 

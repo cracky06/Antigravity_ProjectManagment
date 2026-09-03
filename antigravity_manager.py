@@ -59,6 +59,11 @@ from data_loader import (
     delete_project_cascade,
     delete_conversation,
     move_conversation,
+    export_conversation_to_project,
+    export_conversation_to_path,
+    default_export_filename,
+    conversation_has_dialogue,
+    derive_conv_label,
     ConversationInfo,
     get_paths,
     _find_brain_path,
@@ -1335,11 +1340,11 @@ class AntigravityManagerWindow(QMainWindow):
             self.tree.addTopLevelItem(header_item)
 
             for c_info in no_proj_convs:
-                display_title = c_info.title if c_info.title else c_info.conv_id[:12]
-                if len(display_title) > 36:
-                    display_title = display_title[:34] + "…"
+                label = derive_conv_label(c_info.conv_id, c_info.title or "")
+                if len(label) > 40:
+                    label = label[:38] + "…"
                 time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
-                c_item = QTreeWidgetItem([f"💬  {display_title}  •  [⚠️ Sans projet]{time_suffix}"])
+                c_item = QTreeWidgetItem([f"💬  {label}  •  [⚠️ Sans projet]{time_suffix}"])
                 c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
                 self.tree.addTopLevelItem(c_item)
 
@@ -1375,69 +1380,82 @@ class AntigravityManagerWindow(QMainWindow):
             proj_header_item.setExpanded(True)
             return
 
-        # CAS 3 : "ALL" — Tous les projets + Toutes les conversations récentes
-        # Section 1 : Projets
-        proj_header_item = QTreeWidgetItem(["PROJETS"])
-        proj_header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-        proj_header_item.setForeground(0, header_color)
-        f = proj_header_item.font(0)
-        f.setBold(True)
-        proj_header_item.setFont(0, f)
-        self.tree.addTopLevelItem(proj_header_item)
+        # CAS 3 : "ALL" — vue d'ensemble en 3 sections.
+        # Les TITRES de section sont au niveau 0 ; les dossiers 📁 et les
+        # conversations 💬 sont leurs ENFANTS -> l'indentation native de l'arbre
+        # décale visuellement tout ce qui n'est pas un titre.
 
+        def _make_section_header(label: str) -> QTreeWidgetItem:
+            it = QTreeWidgetItem([label])
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            it.setForeground(0, header_color)
+            fnt = it.font(0)
+            fnt.setBold(True)
+            it.setFont(0, fnt)
+            self.tree.addTopLevelItem(it)
+            return it
+
+        def _add_conv_child(parent: QTreeWidgetItem, c_info, *, badge: bool = False):
+            label = derive_conv_label(c_info.conv_id, c_info.title or "")
+            max_len = 34 if badge else 44
+            if len(label) > max_len:
+                label = label[: max_len - 2] + "…"
+            badge_txt = ""
+            if badge:
+                badge_txt = (
+                    f"  •  [{c_info.project}]" if c_info.project else "  •  [⚠️ Sans projet]"
+                )
+            time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
+            c_item = QTreeWidgetItem([f"💬  {label}{badge_txt}{time_suffix}"])
+            c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+            parent.addChild(c_item)
+            return c_item
+
+        # --- Section 1 : PROJETS -------------------------------------------
+        proj_header_item = _make_section_header("PROJETS")
         for proj_name in sorted(self.project_convs.keys(), key=str.lower):
             convs = self.project_convs[proj_name]
             count = len(convs)
-            
             p_text = f"📁  {proj_name}" + (f"  ({count})" if count > 0 else "")
             p_item = QTreeWidgetItem([p_text])
             p_item.setData(0, Qt.ItemDataRole.UserRole, ("project", proj_name, convs))
-            
             if count > 0:
                 p_item.setForeground(0, active_color)
                 for c_info in convs:
-                    display_title = c_info.title if c_info.title else c_info.conv_id[:12]
-                    if len(display_title) > 38:
-                        display_title = display_title[:36] + "…"
-                    
-                    time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
-                    c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
-                    c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
-                    p_item.addChild(c_item)
-                
-                # En mode "Tous les projets", les dossiers restent repliés par défaut
-                p_item.setExpanded(False)
+                    _add_conv_child(p_item, c_info)
+                p_item.setExpanded(False)  # dossiers repliés par défaut en vue globale
             else:
                 p_item.setForeground(0, empty_color)
+            proj_header_item.addChild(p_item)
 
-            self.tree.addTopLevelItem(p_item)
+        # --- Section 2 : CONVERSATIONS HORS PROJET ------------------------
+        # Seules les orphelines AYANT un vrai dialogue sont affichées : les
+        # sessions techniques (sous-agents, exécutions d'outils sans transcript)
+        # sont vides et sans intérêt ici.
+        no_proj_convs = [c for c in self.all_convs if not c.project]
+        with_dialogue = [c for c in no_proj_convs if conversation_has_dialogue(c.conv_id)]
 
-        # Section 2 : Conversations Récentes avec badge de projet
-        conv_header_item = QTreeWidgetItem(["CONVERSATIONS RÉCENTES"])
-        conv_header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-        conv_header_item.setForeground(0, header_color)
-        f2 = conv_header_item.font(0)
-        f2.setBold(True)
-        conv_header_item.setFont(0, f2)
-        self.tree.addTopLevelItem(conv_header_item)
+        orphan_header_item = _make_section_header(
+            f"CONVERSATIONS HORS PROJET ({len(with_dialogue)})"
+        )
+        for c_info in with_dialogue:
+            _add_conv_child(orphan_header_item, c_info)
 
+        # --- Section 3 : CONVERSATIONS RÉCENTES (repliée par défaut) -------
+        recent_header_item = _make_section_header("CONVERSATIONS RÉCENTES")
         for c_info in self.all_convs[:40]:
-            display_title = c_info.title if c_info.title else c_info.conv_id[:12]
-            if len(display_title) > 30:
-                display_title = display_title[:28] + "…"
-            p_badge = f"  •  [{c_info.project}]" if c_info.project else "  •  [⚠️ Sans projet]"
-            time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
-            c_item = QTreeWidgetItem([f"💬  {display_title}{p_badge}{time_suffix}"])
-            c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
-            self.tree.addTopLevelItem(c_item)
+            _add_conv_child(recent_header_item, c_info, badge=True)
 
-        # Déplier les sections principales
         proj_header_item.setExpanded(True)
-        conv_header_item.setExpanded(True)
+        orphan_header_item.setExpanded(True)
+        recent_header_item.setExpanded(False)
 
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int):
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data:
+            # Titre de section (PROJETS / HORS PROJET / RÉCENTES) : clic = repli.
+            if item.childCount() > 0:
+                item.setExpanded(not item.isExpanded())
             return
         dtype = data[0]
         if dtype == "conv":
@@ -2453,6 +2471,18 @@ class AntigravityManagerWindow(QMainWindow):
             act_open_brain = menu.addAction("📂 Ouvrir le dossier des journaux (brain)")
             act_open_brain.triggered.connect(lambda: self._open_conv_brain(c_info.conv_id))
 
+            # Export Markdown
+            menu.addSeparator()
+            if c_info.project:
+                act_exp_proj = menu.addAction("💾 Exporter en Markdown dans le projet")
+                act_exp_proj.triggered.connect(
+                    lambda checked=False, info=c_info: self._export_conv_to_project(info)
+                )
+            act_exp_as = menu.addAction("💾 Exporter en Markdown…")
+            act_exp_as.triggered.connect(
+                lambda checked=False, info=c_info: self._export_conv_as(info)
+            )
+
             # Menu Déplacer vers un projet
             menu.addSeparator()
             move_menu = menu.addMenu("➡️ Déplacer vers le projet…")
@@ -2482,6 +2512,47 @@ class AntigravityManagerWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(proj_dir)))
         else:
             QMessageBox.warning(self, "Erreur", f"Le dossier {proj_dir} n'existe pas.")
+
+    # -----------------------------------------------------------------
+    # Export Markdown d'une conversation
+    # -----------------------------------------------------------------
+    def _export_conv_to_project(self, c_info: ConversationInfo):
+        """Écrit l'export dans <racine>/<projet>/_conversations/."""
+        if not c_info.project:
+            QMessageBox.information(
+                self, "Aucun projet",
+                "Cette conversation n'est rattachée à aucun projet.\n"
+                "Utilisez « Exporter en Markdown… » pour choisir l'emplacement.",
+            )
+            return
+        ok, result = export_conversation_to_project(
+            c_info.conv_id, c_info.project, title=c_info.title or ""
+        )
+        if ok:
+            self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(result).parent)))
+        else:
+            QMessageBox.critical(self, "Échec de l'export", result)
+
+    def _export_conv_as(self, c_info: ConversationInfo):
+        """Demande l'emplacement puis écrit l'export Markdown."""
+        suggested = default_export_filename(c_info.conv_id, c_info.title or "")
+        start_dir = str(get_projects_root() / (c_info.project or ""))
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exporter la conversation en Markdown",
+            str(Path(start_dir) / suggested),
+            "Fichiers Markdown (*.md);;Tous les fichiers (*)",
+        )
+        if not path:
+            return
+        ok, result = export_conversation_to_path(
+            c_info.conv_id, path, title=c_info.title or "", project=c_info.project or ""
+        )
+        if ok:
+            self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
+        else:
+            QMessageBox.critical(self, "Échec de l'export", result)
 
     def _open_conv_brain(self, conv_id: str):
         brain_p = _find_brain_path(conv_id)

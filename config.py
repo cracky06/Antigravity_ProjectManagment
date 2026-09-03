@@ -160,6 +160,19 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.0": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Export d'une conversation en Markdown (clic droit) : « Exporter en Markdown dans le projet » écrit dans <projet>/_conversations/<date>_<titre>_<id>.md, « Exporter en Markdown… » ouvre un sélecteur d'emplacement",
+                "L'export inclut l'en-tête (titre, projet, date, ID), tous les messages, et une annexe avec les artéfacts de session (walkthrough.md, implementation_plan.md, task.md) s'ils existent",
+                "Les images de la session sont copiées à côté du .md (dans <nom>_images/) et référencées en liens relatifs : images générées, médias temporaires et images fournies par l'utilisateur — le document exporté est autonome",
+            ],
+            "🎨 Identité Visuelle & Ergonomie (ui)": [
+                "Barre latérale réorganisée en 3 sections : PROJETS, CONVERSATIONS HORS PROJET (nouveau — pour repérer et déplacer les conversations orphelines), CONVERSATIONS RÉCENTES (repliée par défaut)",
+                "Les titres de section sont alignés à gauche et les dossiers/conversations indentés d'un cran pour mieux les distinguer",
+                "Section HORS PROJET : seules les conversations avec un vrai dialogue sont listées (les sessions techniques vides des sous-agents sont ignorées)",
+                "Les conversations sans titre affichent leur identifiant suivi de la première ligne d'un artéfact (task.md / walkthrough.md) quand elle existe",
+            ],
+        },
         "v1.9": {
             "🎨 Identité Visuelle & Ergonomie (ui)": [
                 "Interlignage resserré dans la barre latérale (arborescence plus dense)",
