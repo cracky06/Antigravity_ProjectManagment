@@ -138,6 +138,17 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.6": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Barre de recherche locale : boutons [.*] (expression régulière) et [Aa] (respect de la casse), indépendants de la recherche globale",
+                "Surlignage et navigation des occurrences en mode regex, avec correspondances de longueur variable correctement mises en évidence",
+                "Le mode regex de la find bar s'aligne automatiquement sur celui de la recherche globale lors du pré-remplissage (modifiable ensuite)",
+            ],
+            "🐛 Corrections (fix)": [
+                "Un motif regex invalide dans la find bar affiche une bordure rouge et 0 résultat au lieu de rester silencieux",
+                "Les correspondances vides (motifs type « a* ») sont ignorées pour éviter tout blocage",
+            ],
+        },
         "v1.5": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Index de recherche plein-texte SQLite FTS5 : la recherche globale est désormais instantanée (plus de parsing des transcripts à chaque frappe)",

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QObject, QRunnable, QThreadPool, pyqtSignal as _Signal
-from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut
+from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -1065,6 +1065,24 @@ class AntigravityManagerWindow(QMainWindow):
         self.find_input.escape_pressed.connect(self._hide_find_bar)
         find_bar_layout.addWidget(self.find_input)
 
+        # Toggles de mode de la find bar (autonomes vis-à-vis de la recherche
+        # globale) : [.*] expression régulière, [Aa] respect de la casse.
+        self.btn_find_regex = QPushButton(".*")
+        self.btn_find_regex.setObjectName("searchModeBtn")
+        self.btn_find_regex.setCheckable(True)
+        self.btn_find_regex.setFixedWidth(28)
+        self.btn_find_regex.setToolTip("Recherche par expression régulière")
+        self.btn_find_regex.toggled.connect(lambda _=False: self._on_find_text_changed())
+        find_bar_layout.addWidget(self.btn_find_regex)
+
+        self.btn_find_case = QPushButton("Aa")
+        self.btn_find_case.setObjectName("searchModeBtn")
+        self.btn_find_case.setCheckable(True)
+        self.btn_find_case.setFixedWidth(28)
+        self.btn_find_case.setToolTip("Respecter la casse")
+        self.btn_find_case.toggled.connect(lambda _=False: self._on_find_text_changed())
+        find_bar_layout.addWidget(self.btn_find_case)
+
         self.find_result_label = QLabel("")
         self.find_result_label.setObjectName("findResultLabel")
         find_bar_layout.addWidget(self.find_result_label)
@@ -2104,11 +2122,20 @@ class AntigravityManagerWindow(QMainWindow):
     # Recherche Locale dans la Discussion (Find Bar)
     # -----------------------------------------------------------------
     def _prefill_find_from_search(self):
-        """Pré-remplit et affiche la find bar si une recherche globale est active."""
-        if hasattr(self, "search_input"):
-            q = self.search_input.text().strip()
-            if q:
-                self._show_find_bar(prefill=q)
+        """Pré-remplit et affiche la find bar si une recherche globale est active.
+
+        Le mode (regex / casse) de la find bar s'aligne sur celui de la
+        recherche globale au moment du pré-remplissage — l'utilisateur reste
+        libre de le changer ensuite via les toggles de la find bar.
+        """
+        if not hasattr(self, "search_input"):
+            return
+        q = self.search_input.text().strip()
+        if not q:
+            return
+        self.btn_find_regex.setChecked(self.btn_mode_regex.isChecked())
+        # « mots » (global) n'a pas d'équivalent local -> on n'active pas regex.
+        self._show_find_bar(prefill=q)
 
     def _show_find_bar(self, prefill: str = ""):
         """Affiche la barre de recherche locale. Pré-remplit optionnellement le champ."""
@@ -2156,10 +2183,11 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_browser.setExtraSelections([])
         self._find_positions = []
         self._find_current = -1
+        self._set_find_error(False)
         self.chat_browser.setFocus()
 
     def _on_find_text_changed(self):
-        """Réinitialise la recherche depuis le début quand le texte change."""
+        """Recompte les occurrences quand le texte OU un mode change."""
         self._recompute_find_matches()
         if self._find_positions:
             self._goto_find_match(0)
@@ -2168,35 +2196,78 @@ class AntigravityManagerWindow(QMainWindow):
 
     def _do_find_from_start(self):
         """Point d'entrée quand la find bar est (ré)affichée : recompte et va au 1er."""
-        self._recompute_find_matches()
-        if self._find_positions:
-            self._goto_find_match(0)
-        else:
-            self._update_find_label()
+        self._on_find_text_changed()
 
     # -- Recherche locale : moteur de comptage & surlignage --------------
+    def _iter_find_matches(self, text: str):
+        """Génère les (start, length) de toutes les occurrences dans `text`.
+
+        Respecte les toggles [.*] (regex) et [Aa] (casse) de la find bar.
+        Un motif regex invalide -> aucune correspondance + bordure rouge.
+        """
+        query = self.find_input.text()
+        if not query:
+            return
+
+        use_regex = self.btn_find_regex.isChecked()
+        case_sensitive = self.btn_find_case.isChecked()
+
+        if use_regex:
+            flags = 0 if case_sensitive else re.IGNORECASE
+            try:
+                rx = re.compile(query, flags | re.MULTILINE)
+            except re.error:
+                self._set_find_error(True)
+                return
+            self._set_find_error(False)
+            for m in rx.finditer(text):
+                start, end = m.span()
+                # Ignore les correspondances vides (ex: motif « a* ») pour ne pas
+                # boucler ni surligner des positions nulles.
+                if end > start:
+                    yield start, end - start
+            return
+
+        self._set_find_error(False)
+        hay = text if case_sensitive else text.lower()
+        needle = query if case_sensitive else query.lower()
+        if not needle:
+            return
+        i = hay.find(needle)
+        while i != -1:
+            yield i, len(needle)
+            i = hay.find(needle, i + len(needle))
+
+    def _set_find_error(self, is_error: bool):
+        self.find_input.setProperty("queryError", "true" if is_error else "false")
+        self.find_input.style().unpolish(self.find_input)
+        self.find_input.style().polish(self.find_input)
+
     def _recompute_find_matches(self):
-        """Recense toutes les occurrences du terme et les surligne toutes."""
-        self._find_positions = []
+        """Recense toutes les occurrences et les surligne toutes."""
+        self._find_positions = []       # list[tuple[start, length]]
         self._find_current = -1
         query = self.find_input.text()
         if not query:
             self.chat_browser.setExtraSelections([])
+            self._set_find_error(False)
             self._update_find_label()
             return
 
+        text = self.chat_browser.toPlainText()
         doc = self.chat_browser.document()
         is_dark = get_active_theme() == "dark"
         hl = QColor("#7c5b12" if is_dark else "#fde68a")
         selections = []
-        cursor = doc.find(query, 0)
-        while not cursor.isNull():
-            self._find_positions.append(cursor.selectionStart())
+        for start, length in self._iter_find_matches(text):
+            self._find_positions.append((start, length))
+            cur = QTextCursor(doc)
+            cur.setPosition(start)
+            cur.setPosition(start + length, QTextCursor.MoveMode.KeepAnchor)
             sel = self.chat_browser.ExtraSelection()
-            sel.cursor = cursor
+            sel.cursor = cur
             sel.format.setBackground(hl)
             selections.append(sel)
-            cursor = doc.find(query, cursor.selectionEnd())
         self.chat_browser.setExtraSelections(selections)
         self._update_find_label()
 
@@ -2208,12 +2279,10 @@ class AntigravityManagerWindow(QMainWindow):
         n = len(self._find_positions)
         index %= n
         self._find_current = index
-        query = self.find_input.text()
+        start, length = self._find_positions[index]
         cur = self.chat_browser.textCursor()
-        cur.setPosition(self._find_positions[index])
-        cur.movePosition(
-            cur.MoveOperation.Right, cur.MoveMode.KeepAnchor, len(query)
-        )
+        cur.setPosition(start)
+        cur.setPosition(start + length, QTextCursor.MoveMode.KeepAnchor)
         self.chat_browser.setTextCursor(cur)
         self.chat_browser.ensureCursorVisible()
         self._update_find_label()

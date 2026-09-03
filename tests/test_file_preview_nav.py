@@ -306,3 +306,86 @@ def test_hide_find_bar_clears_highlight(win):
     assert win.chat_browser.extraSelections() == []
     assert win._find_positions == []
     assert win._find_current == -1
+
+
+# ---------------------------------------------------------------------------
+# Find bar : modes regex [.*] et casse [Aa] (v1.6)
+# ---------------------------------------------------------------------------
+def test_find_case_sensitive_toggle(win):
+    _load_conv_with_text(win, "Foo FOO foo Foobar")
+    win._show_find_bar()
+    win.find_input.setText("foo")
+
+    win.btn_find_case.setChecked(False)
+    win._on_find_text_changed()
+    assert len(win._find_positions) == 4  # Foo, FOO, foo, Foobar
+
+    win.btn_find_case.setChecked(True)
+    win._on_find_text_changed()
+    assert len(win._find_positions) == 1  # seul "foo"
+
+
+def test_find_regex_variable_length_matches(win):
+    _load_conv_with_text(win, "abc123 def4567 gh89 zzz")
+    win._show_find_bar()
+    win.btn_find_regex.setChecked(True)
+    win.find_input.setText(r"[a-z]+\d+")
+    win._on_find_text_changed()
+
+    text = win.chat_browser.toPlainText()
+    matched = [text[s:s + length] for s, length in win._find_positions]
+    assert matched == ["abc123", "def4567", "gh89"]
+
+
+def test_find_regex_invalid_sets_error_and_no_matches(win):
+    _load_conv_with_text(win, "some text here")
+    win._show_find_bar()
+    win.btn_find_regex.setChecked(True)
+    win.find_input.setText("[unterminated")
+    win._on_find_text_changed()
+
+    assert win._find_positions == []
+    assert win.find_input.property("queryError") == "true"
+
+    # Un motif valide efface l'erreur.
+    win.find_input.setText("text")
+    win._on_find_text_changed()
+    assert win.find_input.property("queryError") == "false"
+
+
+def test_find_regex_navigation_and_label(win):
+    _load_conv_with_text(win, "id=1 id=22 id=333 id=4444")
+    win._show_find_bar()
+    win.btn_find_regex.setChecked(True)
+    win.find_input.setText(r"id=\d+")
+    win._on_find_text_changed()
+    assert win.find_result_label.text() == "1 / 4"
+    win._find_next()
+    assert win.find_result_label.text() == "2 / 4"
+    win._find_prev()
+    win._find_prev()  # wrap
+    assert win.find_result_label.text() == "4 / 4"
+
+
+def test_find_regex_ignores_empty_matches(win):
+    _load_conv_with_text(win, "aaa bbb")
+    win._show_find_bar()
+    win.btn_find_regex.setChecked(True)
+    win.find_input.setText("a*")  # peut matcher le vide
+    win._on_find_text_changed()
+    # Seules les correspondances non vides sont retenues.
+    text = win.chat_browser.toPlainText()
+    assert all(length > 0 for _s, length in win._find_positions)
+    assert "aaa" in [text[s:s + length] for s, length in win._find_positions]
+
+
+def test_hide_find_bar_clears_regex_error(win):
+    _load_conv_with_text(win, "content")
+    win._show_find_bar()
+    win.btn_find_regex.setChecked(True)
+    win.find_input.setText("(bad")
+    win._on_find_text_changed()
+    assert win.find_input.property("queryError") == "true"
+
+    win._hide_find_bar()
+    assert win.find_input.property("queryError") == "false"
