@@ -160,6 +160,13 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.8": {
+            "🐛 Corrections (fix)": [
+                "Barre de recherche locale : le surlignage des occurrences était décalé par rapport au texte réel (positions de la chaîne plate ≠ positions du document Qt)",
+                "Regex : le point « . » ne franchit plus une fin de ligne — un motif comme « c.*?\\.py » ne déborde plus sur les lignes suivantes",
+                "L'occurrence courante n'est plus recouverte par le fond bleu de sélection : elle apparaît en orange, les autres en jaune",
+            ],
+        },
         "v1.7": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "La taille et la position de la fenêtre, la répartition du panneau latéral et le dernier filtre projet sont mémorisés d'une session à l'autre",

@@ -2244,44 +2244,37 @@ class AntigravityManagerWindow(QMainWindow):
         self._on_find_text_changed()
 
     # -- Recherche locale : moteur de comptage & surlignage --------------
-    def _iter_find_matches(self, text: str):
-        """Génère les (start, length) de toutes les occurrences dans `text`.
+    #
+    # On parcourt le QTextDocument BLOC PAR BLOC :
+    #   - le texte d'un bloc (QTextBlock.text()) est une ligne logique sans
+    #     séparateur ; `re` de Python y cherche avec un `.` qui ne franchit
+    #     jamais une frontière de ligne (contrairement à QRegularExpression +
+    #     document().find(), où `.` traversait les paragraphes et un `.*?`
+    #     débordait sur plusieurs lignes visibles) ;
+    #   - la position document d'une occurrence = block.position() + offset
+    #     dans le texte du bloc — mapping exact, pas de décalage plain/doc.
+    def _compile_find_pattern(self):
+        """Compile le motif de recherche courant.
 
-        Respecte les toggles [.*] (regex) et [Aa] (casse) de la find bar.
-        Un motif regex invalide -> aucune correspondance + bordure rouge.
+        Retourne un `re.Pattern`, ou None si le champ est vide ou le motif
+        regex invalide (dans ce dernier cas, pose aussi la bordure rouge).
         """
         query = self.find_input.text()
         if not query:
-            return
+            self._set_find_error(False)
+            return None
 
-        use_regex = self.btn_find_regex.isChecked()
-        case_sensitive = self.btn_find_case.isChecked()
-
-        if use_regex:
-            flags = 0 if case_sensitive else re.IGNORECASE
+        flags = 0 if self.btn_find_case.isChecked() else re.IGNORECASE
+        if self.btn_find_regex.isChecked():
             try:
-                rx = re.compile(query, flags | re.MULTILINE)
+                pat = re.compile(query, flags)
             except re.error:
                 self._set_find_error(True)
-                return
-            self._set_find_error(False)
-            for m in rx.finditer(text):
-                start, end = m.span()
-                # Ignore les correspondances vides (ex: motif « a* ») pour ne pas
-                # boucler ni surligner des positions nulles.
-                if end > start:
-                    yield start, end - start
-            return
-
+                return None
+        else:
+            pat = re.compile(re.escape(query), flags)
         self._set_find_error(False)
-        hay = text if case_sensitive else text.lower()
-        needle = query if case_sensitive else query.lower()
-        if not needle:
-            return
-        i = hay.find(needle)
-        while i != -1:
-            yield i, len(needle)
-            i = hay.find(needle, i + len(needle))
+        return pat
 
     def _set_find_error(self, is_error: bool):
         self.find_input.setProperty("queryError", "true" if is_error else "false")
@@ -2289,8 +2282,8 @@ class AntigravityManagerWindow(QMainWindow):
         self.find_input.style().polish(self.find_input)
 
     def _recompute_find_matches(self):
-        """Recense toutes les occurrences et les surligne toutes."""
-        self._find_positions = []       # list[tuple[start, length]]
+        """Recense toutes les occurrences (bloc par bloc) et les surligne."""
+        self._find_positions = []       # list[tuple[start, end]] en positions document
         self._find_current = -1
         query = self.find_input.text()
         if not query:
@@ -2299,38 +2292,83 @@ class AntigravityManagerWindow(QMainWindow):
             self._update_find_label()
             return
 
-        text = self.chat_browser.toPlainText()
+        pat = self._compile_find_pattern()
+        if pat is None:
+            self.chat_browser.setExtraSelections([])
+            self._update_find_label()
+            return
+
         doc = self.chat_browser.document()
         is_dark = get_active_theme() == "dark"
-        hl = QColor("#7c5b12" if is_dark else "#fde68a")
+        base = QColor("#b45309") if is_dark else QColor("#fde68a")
+
         selections = []
-        for start, length in self._iter_find_matches(text):
-            self._find_positions.append((start, length))
-            cur = QTextCursor(doc)
-            cur.setPosition(start)
-            cur.setPosition(start + length, QTextCursor.MoveMode.KeepAnchor)
-            sel = self.chat_browser.ExtraSelection()
-            sel.cursor = cur
-            sel.format.setBackground(hl)
-            selections.append(sel)
+        block = doc.firstBlock()
+        while block.isValid():
+            btext = block.text()
+            if btext:
+                bpos = block.position()
+                for m in pat.finditer(btext):
+                    s, e = m.span()
+                    if e <= s:
+                        continue  # correspondance vide -> ignorée
+                    a, p = bpos + s, bpos + e
+                    self._find_positions.append((a, p))
+                    c = QTextCursor(doc)
+                    c.setPosition(a)
+                    c.setPosition(p, QTextCursor.MoveMode.KeepAnchor)
+                    sel = self.chat_browser.ExtraSelection()
+                    sel.cursor = c
+                    sel.format.setBackground(base)
+                    selections.append(sel)
+            block = block.next()
+
         self.chat_browser.setExtraSelections(selections)
         self._update_find_label()
 
     def _goto_find_match(self, index: int):
-        """Positionne la vue sur l'occurrence `index` (avec wrap) et l'indique."""
+        """Défile jusqu'à l'occurrence `index` (avec wrap) et l'indique.
+
+        On NE fait PAS setTextCursor avec une sélection : le fond de sélection
+        du navigateur masquerait le surlignage jaune. On déplace juste un
+        curseur non sélectionnant pour amener la zone dans la vue, et on
+        renforce visuellement l'occurrence courante dans les ExtraSelection.
+        """
         if not self._find_positions:
             self._update_find_label()
             return
         n = len(self._find_positions)
         index %= n
         self._find_current = index
-        start, length = self._find_positions[index]
+        anchor, _end = self._find_positions[index]
+
         cur = self.chat_browser.textCursor()
-        cur.setPosition(start)
-        cur.setPosition(start + length, QTextCursor.MoveMode.KeepAnchor)
-        self.chat_browser.setTextCursor(cur)
+        cur.setPosition(anchor)
+        self.chat_browser.setTextCursor(cur)   # curseur sans sélection -> pas de fond bleu
         self.chat_browser.ensureCursorVisible()
+
+        self._refresh_find_highlight()
         self._update_find_label()
+
+    def _refresh_find_highlight(self):
+        """Reconstruit les ExtraSelection : toutes en jaune pâle, la courante
+        en orange plus soutenu."""
+        if not self._find_positions:
+            return
+        doc = self.chat_browser.document()
+        is_dark = get_active_theme() == "dark"
+        base = QColor("#b45309") if is_dark else QColor("#fde68a")
+        current = QColor("#f59e0b") if is_dark else QColor("#fbbf24")
+        selections = []
+        for i, (a, p) in enumerate(self._find_positions):
+            c = QTextCursor(doc)
+            c.setPosition(a)
+            c.setPosition(p, QTextCursor.MoveMode.KeepAnchor)
+            sel = self.chat_browser.ExtraSelection()
+            sel.cursor = c
+            sel.format.setBackground(current if i == self._find_current else base)
+            selections.append(sel)
+        self.chat_browser.setExtraSelections(selections)
 
     def _update_find_label(self):
         query = self.find_input.text()

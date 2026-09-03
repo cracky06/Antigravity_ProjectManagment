@@ -259,6 +259,20 @@ def _load_conv_with_text(win, text: str):
     win.chat_browser.setHtml(f"<html><body><pre>{text}</pre></body></html>")
 
 
+def _matched_texts(win):
+    """Extrait le texte de chaque occurrence via les positions document
+    (_find_positions contient des tuples (start, end) du QTextDocument)."""
+    from PyQt6.QtGui import QTextCursor
+
+    out = []
+    for a, p in win._find_positions:
+        c = win.chat_browser.textCursor()
+        c.setPosition(a)
+        c.setPosition(p, QTextCursor.MoveMode.KeepAnchor)
+        out.append(c.selectedText())
+    return out
+
+
 def test_find_counts_all_occurrences(win):
     _load_conv_with_text(win, "alpha beta alpha gamma alpha delta")
     win._show_find_bar()
@@ -332,9 +346,7 @@ def test_find_regex_variable_length_matches(win):
     win.find_input.setText(r"[a-z]+\d+")
     win._on_find_text_changed()
 
-    text = win.chat_browser.toPlainText()
-    matched = [text[s:s + length] for s, length in win._find_positions]
-    assert matched == ["abc123", "def4567", "gh89"]
+    assert _matched_texts(win) == ["abc123", "def4567", "gh89"]
 
 
 def test_find_regex_invalid_sets_error_and_no_matches(win):
@@ -373,10 +385,44 @@ def test_find_regex_ignores_empty_matches(win):
     win.btn_find_regex.setChecked(True)
     win.find_input.setText("a*")  # peut matcher le vide
     win._on_find_text_changed()
-    # Seules les correspondances non vides sont retenues.
-    text = win.chat_browser.toPlainText()
-    assert all(length > 0 for _s, length in win._find_positions)
-    assert "aaa" in [text[s:s + length] for s, length in win._find_positions]
+    # Seules les correspondances non vides sont retenues (positions = (start, end)).
+    assert all(p > a for a, p in win._find_positions)
+    assert "aaa" in _matched_texts(win)
+
+
+def test_find_regex_dot_does_not_cross_lines(win):
+    """`.` ne doit pas franchir une frontière de ligne : `c.*?\\.py` ne matche
+    que sur la ligne où figure « ....py », pas en débordant sur la suivante."""
+    win.selected_conv = _make_conv("cv-lines")
+    win.chat_browser.setHtml(
+        "<html><body>"
+        "<p>Fix 1 config.py chercher dans MEIPASS en priorite</p>"
+        "<p>Fix 2 config.py ajouter l entree</p>"
+        "<p>Fix 3 antigravity_manager.py bouton loupe</p>"
+        "</body></html>"
+    )
+    win._show_find_bar()
+    win.btn_find_regex.setChecked(True)
+    win.find_input.setText(r"c.*?\.py")
+    win._on_find_text_changed()
+
+    matched = _matched_texts(win)
+    # Deux occurrences « config.py », aucune ne déborde au-delà de « .py ».
+    assert matched == ["config.py", "config.py"]
+
+
+def test_find_regex_greedy_stays_within_line(win):
+    win.selected_conv = _make_conv("cv-greedy")
+    win.chat_browser.setHtml(
+        "<html><body><p>alpha X milieu Y omega</p><p>autre ligne X Y</p></body></html>"
+    )
+    win._show_find_bar()
+    win.btn_find_regex.setChecked(True)
+    win.find_input.setText(r"X.*Y")
+    win._on_find_text_changed()
+
+    matched = _matched_texts(win)
+    assert matched == ["X milieu Y", "X Y"]
 
 
 def test_hide_find_bar_clears_regex_error(win):
