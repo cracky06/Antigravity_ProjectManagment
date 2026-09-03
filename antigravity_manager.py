@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QObject, QRunnable, QThreadPool, pyqtSignal as _Signal
+from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QObject, QRunnable, QThreadPool, QByteArray, pyqtSignal as _Signal
 from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
@@ -48,6 +48,8 @@ from config import (
     get_last_seen_version,
     set_last_seen_version,
     get_changelog_data,
+    get_ui_state,
+    save_ui_state,
     DEFAULT_PROJECTS_ROOT,
     DEFAULT_ANTIGRAVITY_ROOT,
 )
@@ -806,8 +808,20 @@ class AntigravityManagerWindow(QMainWindow):
         super().__init__()
         self.version = get_app_version()
         self.setWindowTitle(f"Antigravity Manager v{self.version} — Project & Chat Management")
-        self.resize(1260, 840)
         self.setMinimumSize(850, 520)
+
+        # Restauration de la géométrie de la fenêtre (sinon taille par défaut).
+        self._ui_state = get_ui_state()
+        geo_b64 = self._ui_state.get("geometry")
+        restored = False
+        if geo_b64:
+            try:
+                if self.restoreGeometry(QByteArray.fromBase64(geo_b64.encode("ascii"))):
+                    restored = True
+            except Exception:
+                restored = False
+        if not restored:
+            self.resize(1260, 840)
 
         icon = _get_app_icon()
         if not icon.isNull():
@@ -868,8 +882,9 @@ class AntigravityManagerWindow(QMainWindow):
             self.changelog_dialog.show()
 
     def closeEvent(self, event):
-        """Attend la fin des tâches d'arrière-plan avant de fermer, pour éviter
-        qu'un runnable n'émette un signal vers un widget déjà détruit."""
+        """Persiste l'état d'interface puis attend la fin des tâches de fond
+        (un runnable qui émet un signal vers un widget détruit -> crash)."""
+        self._persist_ui_state()
         self._shutting_down = True
         self._search_generation += 1  # invalide toute recherche en vol
         try:
@@ -877,6 +892,24 @@ class AntigravityManagerWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+
+    def _persist_ui_state(self):
+        """Enregistre géométrie fenêtre, proportions du splitter et filtre projet."""
+        try:
+            state = {
+                "geometry": bytes(self.saveGeometry().toBase64()).decode("ascii"),
+            }
+            if hasattr(self, "splitter"):
+                sizes = self.splitter.sizes()
+                if len(sizes) == 2 and all(s > 0 for s in sizes):
+                    state["splitter"] = list(sizes)
+            if hasattr(self, "project_filter_combo"):
+                data = self.project_filter_combo.currentData()
+                if data:
+                    state["project_filter"] = data
+            save_ui_state(state)
+        except Exception:
+            pass  # la persistance ne doit jamais empêcher la fermeture
 
     def _apply_theme(self):
         app = QApplication.instance()
@@ -1142,8 +1175,16 @@ class AntigravityManagerWindow(QMainWindow):
         _add_shortcut("Shift+F3", self._find_prev)            # occurrence précédente
         _add_shortcut("Escape", self._on_escape)             # effacer recherche / fermer find bar
 
-        # Proportions initiales : 340px sidebar, reste pour le chat
-        self.splitter.setSizes([340, 920])
+        # Proportions du splitter : restaurées si valides, sinon 340px sidebar.
+        saved_sizes = self._ui_state.get("splitter")
+        if (
+            isinstance(saved_sizes, list)
+            and len(saved_sizes) == 2
+            and all(isinstance(s, int) and s > 0 for s in saved_sizes)
+        ):
+            self.splitter.setSizes(saved_sizes)
+        else:
+            self.splitter.setSizes([340, 920])
 
         # Status Bar
         self.status_bar = QStatusBar()
@@ -1170,6 +1211,10 @@ class AntigravityManagerWindow(QMainWindow):
         if hasattr(self, "project_filter_combo"):
             self.project_filter_combo.blockSignals(True)
             cur_data = self.project_filter_combo.currentData()
+            # Au tout premier chargement, aucune sélection courante : on reprend
+            # le dernier filtre projet enregistré.
+            if cur_data is None:
+                cur_data = self._ui_state.get("project_filter")
             self.project_filter_combo.clear()
 
             total_c = len(self.all_convs)

@@ -12,7 +12,7 @@
 
 ## Tests Unitaires & Assurance Qualité
 - Framework : `pytest`
-- Emplacement : `tests/` (`test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`, `test_file_preview_nav.py`, `test_search_index.py`, `test_search_ui.py`) — 60 tests
+- Emplacement : `tests/` (`test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`, `test_file_preview_nav.py`, `test_search_index.py`, `test_search_ui.py`) — 71 tests
 - `tests/conftest.py` : fixture `isolated_search_index` (autouse) redirigeant l'index vers un fichier jetable et drainant `QThreadPool` avant/après chaque test
 - Exécution manuelle : `.\.venv\Scripts\pytest.exe -v`
 - Intégration Build : Exécution systématique à l'étape `[3/4]` de `Build-App.ps1` (annulation immédiate du build en cas d'échec).
@@ -32,22 +32,25 @@
 - Automatisation des tags : `.\scripts\release.ps1 [minor|major]`
 
 ## Spécificités Techniques
-- `VERSION` : fichier unique définissant la version officielle (`1.6`).
-- `config.py` : gère la persistance des chemins, du thème, de la version et du changelog structuré dans `config.json`.
+- `VERSION` : fichier unique définissant la version officielle (`1.7`).
+- `config.py` : gère la persistance des chemins, du thème, de la version et du changelog structuré dans `config.json`. **[v1.7]** `get_ui_state()` / `save_ui_state()` : clé `ui_state` de `config.json` (`geometry` en base64, `splitter` `[int,int]`, `project_filter`), fusion partielle à l'écriture.
 - **[v1.5]** `search_index.py` : index de recherche plein-texte **SQLite FTS5**, stocké dans `search_index.db` à côté de `config.json` (gitignoré, reconstructible).
   - Schéma : table `docs(conv_id, mtime, project, title, body)` + table virtuelle `docs_fts` (`tokenize='unicode61 remove_diacritics 2'`) synchronisée par triggers.
   - `sync_index(convs)` : incrémental — ne réindexe que les conversations absentes ou dont le `mtime` du transcript a changé, supprime les orphelines. `rebuild_index()` : reconstruction complète.
   - `search(query, mode)` avec `mode ∈ {substring, words, regex}` : `LIKE` échappé / FTS5 `MATCH` (préfixes `terme*`, ET logique) / `re.search` sur le corps stocké. `check_status()` renvoie ok / absent / corrompu ; `drop_index()` supprime le fichier + WAL/SHM.
   - Connexion sqlite par thread (`threading.local`), fermée en fin de tâche worker.
 - `data_loader.py` :
+  - **[v1.7]** `_backup_pb_file(pb_path)` : copie horodatée à la ms (`.bak-YYYYmmdd-HHMMSS-fff`) avant toute réécriture de `agyhub_summaries_proto.pb` dans `move_conversation`, rotation sur `_PB_BACKUP_KEEP` (5).
+  - **[v1.7]** Logger `antigravity_manager.data_loader` : `NullHandler` par défaut ; `ANTIGRAVITY_MANAGER_DEBUG=1` (ou `true`/`debug`/…) → `FileHandler` vers `data_loader.log` à côté de `config.json`. Les `except` critiques (lecture transcript, réécriture protobuf, MAJ echange_IA.md) loggent au lieu de `pass`.
   - Découverte multi-dossiers résiliente d'`agyhub_summaries_proto.pb`.
   - Fonction `move_conversation(conv_id, target_project)` : réassignation officielle avec ré-encodage binaire protobuf wire-format pour compatibilité totale avec Google Antigravity IDE.
   - Priorisation du format compact `transcript.jsonl` et pré-filtrage des lignes `USER_INPUT`/`PLANNER_RESPONSE` pour une lecture ultra-rapide.
   - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
   - Extraction du workspace sécurisée : dé-échappement des sauts de ligne, exclusion des chemins internes (.gemini, brain, Temp), détection des `SearchPath` / `Cwd` et élimination des faux projets (`n`, `nLast`).
   - Rendu riche de fallback pour les sessions de sous-agents : affichage automatique des artéfacts markdown, des médias/images générés et du résumé des opérations techniques.
-- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.6) :
+- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v1.7) :
   - Barre de titre avec numéro de version lu dynamiquement depuis `VERSION` via `get_app_version()` (jamais hard-codé).
+  - **[v1.7] Persistance de l'état d'interface** : `__init__` restaure `restoreGeometry(base64)` (fallback `resize(1260, 840)`), les tailles du `splitter` (si `[int>0, int>0]`) et le dernier `project_filter` (au 1er `reload_data`, quand aucune sélection courante). `closeEvent` → `_persist_ui_state()` écrit `saveGeometry()` + `splitter.sizes()` + filtre courant dans `ui_state` avant de drainer le pool.
   - **[v1.5] Recherche globale asynchrone & multi-modes** : `_SearchRunnable` (QRunnable) exécute `search_index.search()` sur `QThreadPool.globalInstance()` et émet `finished(generation, set[conv_id])` ; un compteur `_search_generation` fait ignorer les résultats périmés. Boutons `[.*]` (regex) et `[Ab]` (mots) mutuellement exclusifs dans le champ (`searchModeBtn`, `_current_search_mode()`). Motif regex invalide → propriété `queryError=true` (bordure rouge) + message. `_IndexSyncRunnable` synchronise l'index en tâche de fond au démarrage et après chaque `reload_data()` ; repli `_fallback_search` (parsing à la volée) tant que l'index n'est pas prêt. `closeEvent` draine le pool (`waitForDone`) et invalide les recherches en vol. Bouton « Réindexer » dans `SettingsDialog` → `rebuild_search_index()`.
   - **[v1.6] Find bar — modes regex & casse** : toggles autonomes `[.*]` (`btn_find_regex`) et `[Aa]` (`btn_find_case`) dans la find bar. `_iter_find_matches(text)` génère les `(start, length)` — `re.finditer` (avec `re.IGNORECASE`/`re.MULTILINE` selon toggles, correspondances vides ignorées) ou `str.find` en boucle. `_find_positions` stocke désormais des tuples `(start, length)` (longueur variable en regex). Motif invalide → `queryError` sur `find_input` (bordure rouge) + 0 résultat. `_prefill_find_from_search` aligne `btn_find_regex` sur `btn_mode_regex` global.
   - **[v1.5] Find bar — compteur & surlignage** : `_recompute_find_matches()` recense toutes les occurrences, les surligne toutes via `setExtraSelections`, `_goto_find_match(i)` navigue avec wrap et met à jour le label `n / total` (`_update_find_label`). `F3`/`Maj+F3` = suivant/précédent.
@@ -70,7 +73,7 @@
   - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné.
   - Menus contextuels complets (déplacement / réassignation vers un autre projet, suppression en cascade, copie ID, ouverture dossier brain/projet).
 - `assets/` : icône officielle du gestionnaire (`icon.png` 1024x1024 transparent, `icon.ico` multi-résolution).
-- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (60 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`), le fichier `VERSION` et `--collect-submodules pygments` (lexers/styles chargés dynamiquement, sinon la coloration de l'aperçu de fichier serait muette dans l'exe). **[v1.4]** La suppression de `build/` et `dist/` passe par `Remove-BuildDirectory` (6 réessais, délai 1 s) pour absorber les verrous transitoires posés par une fenêtre de l'Explorateur ou un watcher d'IDE.
+- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (71 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`), le fichier `VERSION` et `--collect-submodules pygments` (lexers/styles chargés dynamiquement, sinon la coloration de l'aperçu de fichier serait muette dans l'exe). **[v1.4]** La suppression de `build/` et `dist/` passe par `Remove-BuildDirectory` (6 réessais, délai 1 s) pour absorber les verrous transitoires posés par une fenêtre de l'Explorateur ou un watcher d'IDE.
 - `.gitattributes` : **[v1.4]** normalisation des fins de ligne (`VERSION`, `*.py`, `*.md`, `*.txt` en LF ; `*.ps1`, `*.bat` en CRLF ; `*.ico`/`*.png`/`*.pb` binaires). Supprime les avertissements « LF will be replaced by CRLF » à chaque commit.
-- `tests/` : `test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`, **[v1.4]** `test_file_preview_nav.py` (aperçu fichier, garde-fous, `_navigate_back`, pile `_nav_history`, raccourcis, compteur find bar), **[v1.5]** `test_search_index.py` (index FTS, 3 modes, sync incrémentale) + `test_search_ui.py` (toggles, mode effectif, résultat périmé) + `conftest.py`, +6 tests find bar regex/casse (v1.6). 60 tests au total.
+- `tests/` : `test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`, **[v1.4]** `test_file_preview_nav.py` (aperçu fichier, garde-fous, `_navigate_back`, pile `_nav_history`, raccourcis, compteur find bar), **[v1.5]** `test_search_index.py` (index FTS, 3 modes, sync incrémentale) + `test_search_ui.py` (toggles, mode effectif, résultat périmé) + `conftest.py`, +6 tests find bar regex/casse (v1.6), +11 tests robustesse (v1.7). 71 tests au total.
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.

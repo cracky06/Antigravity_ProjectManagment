@@ -6,13 +6,84 @@ permet la suppression en cascade et le chargement des messages de chat.
 """
 
 import json
+import logging
+import os
 import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
-from config import get_projects_root, get_antigravity_root
+from config import get_projects_root, get_antigravity_root, _get_base_dir
+
+# ---------------------------------------------------------------------------
+# Journalisation optionnelle
+# ---------------------------------------------------------------------------
+# Beaucoup de blocs `except Exception: pass` avalent des transcripts malformés
+# ou des écritures protobuf ratées sans laisser de trace. On les remonte dans
+# un logger silencieux par défaut : posez la variable d'environnement
+# ANTIGRAVITY_MANAGER_DEBUG=1 (ou =debug) pour écrire dans data_loader.log,
+# à côté de config.json / de l'exe.
+logger = logging.getLogger("antigravity_manager.data_loader")
+
+if not logger.handlers:
+    _debug_flag = os.environ.get("ANTIGRAVITY_MANAGER_DEBUG", "").strip().lower()
+    if _debug_flag in ("1", "true", "yes", "debug", "on"):
+        try:
+            _log_file = _get_base_dir() / "data_loader.log"
+            _handler = logging.FileHandler(_log_file, encoding="utf-8")
+            _handler.setFormatter(
+                logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+            )
+            logger.addHandler(_handler)
+            logger.setLevel(logging.DEBUG)
+            logger.debug("Journalisation activée -> %s", _log_file)
+        except Exception:
+            logger.addHandler(logging.NullHandler())
+    else:
+        logger.addHandler(logging.NullHandler())
+
+
+# ---------------------------------------------------------------------------
+# Sauvegarde préventive du fichier de métadonnées protobuf
+# ---------------------------------------------------------------------------
+_PB_BACKUP_KEEP = 5  # nombre de sauvegardes horodatées conservées par fichier
+
+
+def _backup_pb_file(pb_path: Path) -> Path | None:
+    """Copie `pb_path` en `<nom>.bak-YYYYmmdd-HHMMSS` avant toute réécriture.
+
+    Fait une rotation : ne garde que les `_PB_BACKUP_KEEP` sauvegardes les plus
+    récentes. Retourne le chemin de la copie créée, ou None si rien n'a été fait.
+    """
+    try:
+        if not pb_path.is_file():
+            return None
+        # Horodatage à la milliseconde : deux réécritures rapprochées gardent
+        # chacune leur sauvegarde.
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        backup = pb_path.with_name(f"{pb_path.name}.bak-{stamp}")
+        if not backup.exists():
+            shutil.copy2(pb_path, backup)
+            logger.debug("Sauvegarde protobuf créée : %s", backup)
+
+        # Rotation des anciennes sauvegardes.
+        pattern = f"{pb_path.name}.bak-*"
+        backups = sorted(
+            pb_path.parent.glob(pattern),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for old in backups[_PB_BACKUP_KEEP:]:
+            try:
+                old.unlink()
+                logger.debug("Ancienne sauvegarde supprimée : %s", old)
+            except OSError as exc:
+                logger.warning("Impossible de supprimer %s : %s", old, exc)
+        return backup
+    except Exception as exc:  # pragma: no cover - la sauvegarde ne doit jamais bloquer
+        logger.warning("Échec de la sauvegarde de %s : %s", pb_path, exc)
+        return None
 
 
 def get_paths():
@@ -153,7 +224,8 @@ def _extract_proto_metadata():
 
     try:
         data = summaries_pb.read_bytes()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Lecture de %s impossible : %s", summaries_pb, exc)
         return {}
 
     top = _parse_proto_fields(data)
@@ -417,11 +489,11 @@ def load_chat_messages(conv_id: str) -> list[dict]:
 
             try:
                 _CHAT_CACHE[conv_id] = (transcript.stat().st_mtime, messages)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Cache non mis à jour pour %s : %s", conv_id, exc)
 
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Lecture du transcript %s échouée : %s", transcript, exc)
 
     # Si aucun message de log mais des artéfacts sont présents sur disque
     if not messages:
@@ -613,8 +685,8 @@ def _extract_workspace_from_transcript(conv_id: str) -> str:
                         val = _clean_path_string(m3.group(0)).rstrip("`'\",.:; ")
                         if val and not any(k in val.lower() for k in (".gemini", "temp", "tmp")):
                             return val
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Extraction workspace échouée pour %s : %s", conv_id, exc)
     return ""
 
 
@@ -807,8 +879,8 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
                 lines = [l for l in echange.read_text(encoding="utf-8").splitlines() if not l.lower().startswith("project:")]
             lines.insert(0, f"project: {target_project_name}")
             echange.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Échec MAJ echange_IA.md %s : %s", echange, exc)
 
     # 2. Mise à jour des transcripts
     for sub in ("antigravity-ide", "antigravity", "antigravity-backup"):
@@ -820,8 +892,8 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
                     content = t_file.read_text(encoding="utf-8", errors="ignore")
                     updated = re.sub(r"(\[URI\]\s*->\s*\[CorpusName\]:\s*\n?\s*)([^\s\n\r]+)", rf"\g<1>{new_uri}", content)
                     t_file.write_text(updated, encoding="utf-8")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Échec MAJ transcript %s : %s", t_file, exc)
 
     # 3. Mise à jour dans agyhub_summaries_proto.pb
     for sub in ("antigravity-ide", "antigravity", "antigravity-backup"):
@@ -898,9 +970,17 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
                 for tw, tv in titems:
                     rebuilt_file.extend(_encode_proto_field(tf, tw, tv))
 
+            # Sauvegarde préventive AVANT d'écraser le fichier officiel.
+            _backup_pb_file(pb_path)
             pb_path.write_bytes(bytes(rebuilt_file))
-        except Exception:
-            pass
+            logger.debug(
+                "agyhub_summaries_proto.pb réécrit (%s) pour move %s -> %s",
+                sub, conv_id, target_project_name,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Échec de la réécriture protobuf %s pour %s : %s", pb_path, conv_id, exc
+            )
 
     # 4. Invalider le cache mémoire
     if conv_id in _CHAT_CACHE:

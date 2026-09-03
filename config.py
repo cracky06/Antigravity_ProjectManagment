@@ -59,6 +59,28 @@ def save_config(config: dict) -> None:
         print(f"Erreur lors de la sauvegarde de la configuration : {e}")
 
 
+def get_ui_state() -> dict:
+    """Retourne l'état d'interface persistant (géométrie fenêtre, splitter, filtre).
+
+    Forme : {"geometry": <str base64>, "splitter": [int, int],
+             "project_filter": <str>}. Clés absentes = valeurs par défaut.
+    """
+    cfg = load_config()
+    state = cfg.get("ui_state", {})
+    return state if isinstance(state, dict) else {}
+
+
+def save_ui_state(state: dict) -> None:
+    """Fusionne `state` dans la clé `ui_state` de config.json."""
+    cfg = load_config()
+    current = cfg.get("ui_state", {})
+    if not isinstance(current, dict):
+        current = {}
+    current.update(state)
+    cfg["ui_state"] = current
+    save_config(cfg)
+
+
 def get_projects_root() -> Path:
     cfg = load_config()
     return Path(cfg.get("projects_root", DEFAULT_PROJECTS_ROOT))
@@ -138,6 +160,18 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v1.7": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "La taille et la position de la fenêtre, la répartition du panneau latéral et le dernier filtre projet sont mémorisés d'une session à l'autre",
+            ],
+            "🛡️ Robustesse & Sécurité des données (fix)": [
+                "Sauvegarde horodatée automatique de agyhub_summaries_proto.pb avant toute réécriture lors d'un déplacement de conversation (5 copies conservées par rotation)",
+                "Journal de diagnostic optionnel : définir la variable d'environnement ANTIGRAVITY_MANAGER_DEBUG=1 écrit data_loader.log (lectures/écritures échouées auparavant silencieuses)",
+            ],
+            "🔧 Qualité & Outillage (chore)": [
+                "Couverture de tests portée à 71 tests (sauvegarde protobuf + rotation, logger, persistance de l'état d'interface)",
+            ],
+        },
         "v1.6": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Barre de recherche locale : boutons [.*] (expression régulière) et [Aa] (respect de la casse), indépendants de la recherche globale",
