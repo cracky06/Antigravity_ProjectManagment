@@ -139,10 +139,10 @@ def test_collect_session_images_order(brain_with_images):
 def test_copy_session_images_creates_files_and_relpaths(brain_with_images, tmp_path):
     dest = tmp_path / "out_images"
     rels = dl._copy_session_images(brain_with_images, dest)
-    assert {Path(r).name for _l, r in rels} == {
+    assert {Path(r).name for _l, r, _src in rels} == {
         "gen_logo_1.jpg", "media_tmp.png", "reference.png"
     }
-    assert all(r.startswith("out_images/") for _l, r in rels)
+    assert all(r.startswith("out_images/") for _l, r, _src in rels)
     assert (dest / "gen_logo_1.jpg").read_bytes() == b"JPG-GEN"
     assert (dest / "reference.png").read_bytes() == b"PNG-REF"
 
@@ -155,22 +155,133 @@ def test_copy_session_images_name_collision(tmp_path):
     (brain / ".user_uploaded" / "media.png").write_bytes(b"B")
     dest = tmp_path / "imgs"
     rels = dl._copy_session_images(brain, dest)
-    names = sorted(Path(r).name for _l, r in rels)
+    names = sorted(Path(r).name for _l, r, _src in rels)
     assert names == ["media.png", "media_2.png"]
     assert (dest / "media.png").is_file() and (dest / "media_2.png").is_file()
+    # nom source conservé pour la corrélation
+    assert sorted(src for _l, _r, src in rels) == ["media.png", "media.png"]
 
 
-def test_export_includes_images_section(stub_conv, brain_with_images, monkeypatch, tmp_path):
+def test_export_without_generate_image_puts_all_in_final_section(
+    stub_conv, brain_with_images, monkeypatch, tmp_path
+):
+    # Pas de lignes GENERATE_IMAGE dans le transcript -> aucune corrélation
+    # -> toutes les images vont dans la section « Images » de fin.
     monkeypatch.setattr(dl, "_find_brain_path", lambda cid: brain_with_images)
+    monkeypatch.setattr(dl, "_image_generation_times", lambda cid: {})
     out = tmp_path / "conv.md"
     ok, res = dl.export_conversation_to_path("cid", out, title="T", project="P")
     assert ok is True
     assert "+3 image" in res
     md = out.read_text(encoding="utf-8")
     assert "## Images" in md
-    assert "![gen_logo_1.jpg](conv_images/gen_logo_1.jpg)" in md
-    assert "![reference.png](conv_images/reference.png)" in md
-    assert (out.parent / "conv_images" / "media_tmp.png").is_file()
+    tail = md.split("## Images", 1)[1]
+    assert "gen_logo_1.jpg" in tail and "reference.png" in tail
+    assert "**Images de cet échange :**" not in md
+
+
+def test_generate_image_places_image_inline(stub_conv, tmp_path, monkeypatch):
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "icone_A.png").write_bytes(b"A")
+    (brain / "icone_B.png").write_bytes(b"B")
+    monkeypatch.setattr(dl, "_find_brain_path", lambda cid: brain)
+    monkeypatch.setattr(
+        dl, "load_chat_messages",
+        lambda cid: [
+            {"role": "user", "text": "fais icone A", "timestamp": "t1", "epoch": 1000.0},
+            {"role": "model", "text": "voici A", "timestamp": "t2", "epoch": 1010.0},
+            {"role": "user", "text": "fais icone B", "timestamp": "t3", "epoch": 2000.0},
+            {"role": "model", "text": "voici B", "timestamp": "t4", "epoch": 2010.0},
+        ],
+    )
+    # icone_A générée à 1005 (entre msg0 et msg1), icone_B à 2005 (entre msg2/msg3)
+    monkeypatch.setattr(
+        dl, "_image_generation_times",
+        lambda cid: {"icone_A.png": 1005.0, "icone_B.png": 2005.0},
+    )
+    out = tmp_path / "c.md"
+    dl.export_conversation_to_path("cid", out, title="T", project="P")
+    body = out.read_text(encoding="utf-8").splitlines()
+
+    def line_of(substr):
+        return next(i for i, l in enumerate(body) if substr in l)
+
+    assert line_of("fais icone A") < line_of("icone_A.png") < line_of("fais icone B")
+    assert line_of("fais icone B") < line_of("icone_B.png")
+    assert "## Images" not in "\n".join(body)  # tout inline
+    assert "(images finales)" not in "\n".join(body)
+
+
+def test_generate_image_after_last_message_stays_with_it(stub_conv, tmp_path, monkeypatch):
+    # Une seule discussion : l'image générée après l'unique message est collée
+    # à ce message (pas de « images finales » séparées puisqu'il n'y a rien après).
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "tardive.png").write_bytes(b"X")
+    monkeypatch.setattr(dl, "_find_brain_path", lambda cid: brain)
+    monkeypatch.setattr(
+        dl, "load_chat_messages",
+        lambda cid: [{"role": "user", "text": "go", "timestamp": "t", "epoch": 100.0}],
+    )
+    monkeypatch.setattr(dl, "_image_generation_times", lambda cid: {"tardive.png": 999.0})
+    out = tmp_path / "c.md"
+    dl.export_conversation_to_path("cid", out, title="T", project="P")
+    md = out.read_text(encoding="utf-8")
+    body = md.splitlines()
+
+    def line_of(s):
+        return next(i for i, l in enumerate(body) if s in l)
+
+    assert line_of("go") < line_of("tardive.png")
+    assert "## Images" not in md
+
+
+def test_generate_image_between_middle_and_last_message(stub_conv, tmp_path, monkeypatch):
+    # 3 messages ; image générée entre msg1 et msg2 -> après msg1, pas en fin.
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "mid.png").write_bytes(b"X")
+    monkeypatch.setattr(dl, "_find_brain_path", lambda cid: brain)
+    monkeypatch.setattr(
+        dl, "load_chat_messages",
+        lambda cid: [
+            {"role": "user", "text": "un", "timestamp": "t", "epoch": 100.0},
+            {"role": "model", "text": "deux", "timestamp": "t", "epoch": 200.0},
+            {"role": "user", "text": "trois", "timestamp": "t", "epoch": 300.0},
+        ],
+    )
+    monkeypatch.setattr(dl, "_image_generation_times", lambda cid: {"mid.png": 250.0})
+    out = tmp_path / "c.md"
+    dl.export_conversation_to_path("cid", out, title="T", project="P")
+    body = out.read_text(encoding="utf-8").splitlines()
+
+    def line_of(s):
+        return next(i for i, l in enumerate(body) if s in l)
+
+    assert line_of("deux") < line_of("mid.png") < line_of("trois")
+
+
+def test_undated_image_goes_to_final_section(stub_conv, tmp_path, monkeypatch):
+    brain = tmp_path / "brain"
+    brain.mkdir()
+    (brain / "generee.png").write_bytes(b"A")
+    (brain / ".user_uploaded").mkdir()
+    (brain / ".user_uploaded" / "reference.png").write_bytes(b"B")
+    monkeypatch.setattr(dl, "_find_brain_path", lambda cid: brain)
+    monkeypatch.setattr(
+        dl, "load_chat_messages",
+        lambda cid: [{"role": "user", "text": "msg", "timestamp": "t", "epoch": 500.0}],
+    )
+    # seule "generee.png" a une ligne GENERATE_IMAGE
+    monkeypatch.setattr(dl, "_image_generation_times", lambda cid: {"generee.png": 400.0})
+
+    out = tmp_path / "c.md"
+    dl.export_conversation_to_path("cid", out, title="T", project="P")
+    md = out.read_text(encoding="utf-8")
+    assert "## Images" in md
+    assert "reference.png" in md.split("## Images", 1)[1]      # non corrélée -> fin
+    assert "generee.png" in md.split("## Images", 1)[0]         # corrélée -> inline
 
 
 def test_build_markdown_lists_images_when_no_copy(stub_conv, brain_with_images, monkeypatch):

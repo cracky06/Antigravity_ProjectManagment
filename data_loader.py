@@ -526,10 +526,12 @@ def load_chat_messages(conv_id: str) -> list[dict]:
                     content = obj.get("content", "")
                     ts = obj.get("created_at", "")
                     time_display = ""
+                    epoch = 0.0
                     if ts:
                         try:
                             pdt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                             time_display = pdt.strftime("%d/%m %H:%M")
+                            epoch = pdt.timestamp()
                         except Exception:
                             time_display = ts[:16]
 
@@ -544,6 +546,7 @@ def load_chat_messages(conv_id: str) -> list[dict]:
                                 "role": "user",
                                 "text": text,
                                 "timestamp": time_display,
+                                "epoch": epoch,
                             })
 
                     # Réponse visible du modèle
@@ -554,6 +557,7 @@ def load_chat_messages(conv_id: str) -> list[dict]:
                                 "role": "model",
                                 "text": text,
                                 "timestamp": time_display,
+                                "epoch": epoch,
                             })
 
             try:
@@ -1077,6 +1081,52 @@ _IMAGE_SOURCES = (
     (".tempmediaStorage", "Médias temporaires"),
     (".user_uploaded", "Images fournies par l'utilisateur"),
 )
+# Epoch (10 à 13 chiffres) inclus dans un nom de fichier : media_1788373607544.png
+
+
+def _image_generation_times(conv_id: str) -> dict[str, float]:
+    """Corrèle chaque image à l'instant où elle a été générée, d'après le
+    transcript.
+
+    Les lignes `type == "GENERATE_IMAGE"` du transcript portent un `created_at`
+    dans le MÊME référentiel que les messages, et leur `content` cite le nom du
+    fichier produit. L'epoch inscrit dans le nom du fichier
+    (`..._1788371000315.jpg`), lui, est sur un autre référentiel décalé et ne
+    doit pas servir à la corrélation.
+
+    Retour : { "nom_de_fichier.jpg": epoch_secondes }.
+    """
+    transcript = _find_transcript_file(conv_id)
+    if not transcript or not transcript.is_file():
+        return {}
+    out: dict[str, float] = {}
+    name_re = re.compile(r"[\w.\-]+\.(?:png|jpe?g|webp|gif|bmp|svg)", re.IGNORECASE)
+    try:
+        with transcript.open(encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if '"GENERATE_IMAGE"' not in line and "GENERATE_IMAGE" not in line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if obj.get("type") != "GENERATE_IMAGE":
+                    continue
+                ts = obj.get("created_at", "")
+                if not ts:
+                    continue
+                try:
+                    epoch = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    continue
+                blob = obj.get("content", "") or json.dumps(obj, ensure_ascii=False)
+                for m in name_re.finditer(blob):
+                    fname = m.group(0).rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                    # Garde la 1re occurrence (l'instant de génération).
+                    out.setdefault(fname, epoch)
+    except OSError as exc:
+        logger.debug("_image_generation_times(%s) : %s", conv_id, exc)
+    return out
 
 
 def _collect_session_images(brain_path: Path) -> list[tuple[str, Path]]:
@@ -1100,6 +1150,8 @@ def _collect_session_images(brain_path: Path) -> list[tuple[str, Path]]:
     return out
 
 
+
+
 def _slugify(text: str, max_len: int = 60) -> str:
     """Transforme un titre en fragment de nom de fichier sûr."""
     s = _MD_SLUG_RE.sub("-", (text or "").strip()).strip("-")
@@ -1110,17 +1162,20 @@ def build_conversation_markdown(
     conv_id: str,
     title: str = "",
     project: str = "",
-    images: list[tuple[str, str]] | None = None,
+    images: list[tuple] | None = None,
 ) -> str:
     """Construit le document Markdown complet d'une conversation.
 
     En-tête (titre / projet / date / ID) + messages (### 👤 Utilisateur /
-    ### ✨ Antigravity) + annexe des artéfacts du dossier brain s'ils existent
-    + section « Images » si `images` est fourni.
+    ### ✨ Antigravity), avec les images HORODATÉES intercalées juste après le
+    message correspondant, + annexe des artéfacts + section « Images » de fin
+    pour les images sans horodatage.
 
-    `images` : liste de (label_section, chemin_relatif_dans_le_md) déjà résolue
-    par l'appelant (qui a copié les fichiers à côté du .md). Si None, la section
-    Images liste simplement les noms de fichiers présents dans le brain.
+    `images` : liste de (label_section, chemin_relatif, nom_source) résolue par
+    l'appelant (`_copy_session_images`). `nom_source` sert à retrouver l'instant
+    de génération dans le transcript. Tolère aussi les 2-tuples
+    (label, chemin) — l'image ira alors en section « Images » de fin. Si None,
+    la section Images liste simplement les noms présents dans le brain.
     """
     fallback_title, last_dt = get_transcript_info(conv_id)
     disp_title = title or fallback_title or conv_id[:12]
@@ -1138,9 +1193,36 @@ def build_conversation_markdown(
         "",
     ]
 
+    def _img_md(rel: str) -> str:
+        return f"![{Path(rel).name}]({rel})"
+
     messages = load_chat_messages(conv_id)
+
+    # Corrélation image -> instant de génération (via les lignes GENERATE_IMAGE
+    # du transcript, même référentiel que les messages).
+    gen_times = _image_generation_times(conv_id) if images else {}
+
+    # Ventilation : image datée (placement inline) vs non datée (section fin).
+    dated_images: list[tuple[str, str, float]] = []
+    undated_images: list[tuple[str, str]] = []
+    if images:
+        for entry in images:
+            label, rel = entry[0], entry[1]
+            src_name = entry[2] if len(entry) >= 3 else Path(rel).name
+            epoch = gen_times.get(src_name) or gen_times.get(Path(rel).name)
+            if epoch is not None:
+                dated_images.append((label, rel, epoch))
+            else:
+                undated_images.append((label, rel))
+    dated_images.sort(key=lambda e: e[2])
+
     if messages:
-        for msg in messages:
+        # Epoch de chaque message (0.0 si absent) ; on garde les indices des
+        # messages RÉELLEMENT horodatés pour trouver le bon point d'insertion.
+        msg_epochs = [float(m.get("epoch") or 0.0) for m in messages]
+        img_idx = 0
+
+        for i, msg in enumerate(messages):
             role = "👤 Utilisateur" if msg.get("role") == "user" else "✨ Antigravity"
             ts = msg.get("timestamp", "")
             head = f"### {role}" + (f"  ·  {ts}" if ts else "")
@@ -1148,11 +1230,45 @@ def build_conversation_markdown(
             lines.append("")
             lines.append((msg.get("text", "") or "").rstrip())
             lines.append("")
+
+            # Prochain message horodaté après celui-ci -> borne haute.
+            next_epoch = float("inf")
+            for j in range(i + 1, len(messages)):
+                if msg_epochs[j] > 0:
+                    next_epoch = msg_epochs[j]
+                    break
+
+            emitted = False
+            while img_idx < len(dated_images) and dated_images[img_idx][2] < next_epoch:
+                _lbl, rel, _ep = dated_images[img_idx]
+                if not emitted:
+                    lines.append("**Images de cet échange :**")
+                    lines.append("")
+                    emitted = True
+                lines.append(_img_md(rel))
+                lines.append("")
+                img_idx += 1
+
+            lines.append("---")
+            lines.append("")
+
+        # Images datées postérieures au dernier message.
+        if img_idx < len(dated_images):
+            lines.append("### ✨ Antigravity  ·  (images finales)")
+            lines.append("")
+            while img_idx < len(dated_images):
+                _lbl, rel, _ep = dated_images[img_idx]
+                lines.append(_img_md(rel))
+                lines.append("")
+                img_idx += 1
             lines.append("---")
             lines.append("")
     else:
         lines.append("_Aucun message textuel dans les journaux de cette session._")
         lines.append("")
+        # Sans messages : toutes les images vont en section de fin.
+        undated_images = [(e[0], e[1]) for e in images] if images else []
+        dated_images = []
 
     # Annexe : artéfacts du dossier brain.
     brain_p = _find_brain_path(conv_id)
@@ -1179,22 +1295,26 @@ def build_conversation_markdown(
                 lines.append("---")
                 lines.append("")
 
-    # Section Images.
+    # Section « Images » de fin : uniquement les images NON horodatées
+    # (les horodatées ont été placées inline après leur message).
     if images:
-        # `images` fourni : fichiers déjà copiés, on les affiche.
-        lines.append("## Images")
-        lines.append("")
-        current_label = None
-        for label, rel_path in images:
-            if label != current_label:
-                lines.append(f"### {label}")
-                lines.append("")
-                current_label = label
-            name = Path(rel_path).name
-            lines.append(f"![{name}]({rel_path})")
+        if undated_images:
+            note = (
+                " (horodatées placées ci-dessus dans leur échange)"
+                if dated_images else ""
+            )
+            lines.append(f"## Images{note}")
             lines.append("")
-        lines.append("---")
-        lines.append("")
+            current_label = None
+            for label, rel_path in undated_images:
+                if label != current_label:
+                    lines.append(f"### {label}")
+                    lines.append("")
+                    current_label = label
+                lines.append(f"![{Path(rel_path).name}]({rel_path})")
+                lines.append("")
+            lines.append("---")
+            lines.append("")
     elif brain_p and brain_p.is_dir():
         # Pas de copie demandée : on liste au moins les noms trouvés.
         found = _collect_session_images(brain_p)
@@ -1217,19 +1337,20 @@ def build_conversation_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _copy_session_images(brain_path: Path, dest_dir: Path) -> list[tuple[str, str]]:
+def _copy_session_images(brain_path: Path, dest_dir: Path) -> list[tuple[str, str, str]]:
     """Copie toutes les images de la session dans `dest_dir` et retourne
-    [(label_section, chemin_relatif "images/<nom>"), …].
+    [(label_section, chemin_relatif "<dir>/<nom_dest>", nom_source), …].
 
-    Les collisions de noms (même nom dans deux sous-dossiers) sont désambiguïsées
-    par un suffixe numérique.
+    `nom_source` (le nom d'origine, avant désambiguïsation) sert à corréler
+    l'image avec les messages via `_image_generation_times`. Les collisions de
+    noms (même nom dans deux sous-dossiers) sont résolues par suffixe numérique.
     """
     found = _collect_session_images(brain_path)
     if not found:
         return []
     dest_dir.mkdir(parents=True, exist_ok=True)
     used: set[str] = set()
-    result: list[tuple[str, str]] = []
+    result: list[tuple[str, str, str]] = []
     for label, src in found:
         name = src.name
         if name in used:
@@ -1244,7 +1365,7 @@ def _copy_session_images(brain_path: Path, dest_dir: Path) -> list[tuple[str, st
         except OSError as exc:
             logger.warning("Copie image %s échouée : %s", src, exc)
             continue
-        result.append((label, f"{dest_dir.name}/{name}"))
+        result.append((label, f"{dest_dir.name}/{name}", src.name))
     return result
 
 

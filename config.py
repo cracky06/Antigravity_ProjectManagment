@@ -160,6 +160,13 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.1": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Export Markdown : les images générées sont désormais placées directement dans l'échange auquel elles correspondent, au lieu d'être toutes reléguées en fin de document",
+                "La corrélation image ↔ message se fait via les événements « génération d'image » du journal (horodatage fiable), et non plus via le nom du fichier",
+                "Les images non corrélées (téléversées, médias temporaires) restent regroupées dans la section « Images » de fin",
+            ],
+        },
         "v2.0": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Export d'une conversation en Markdown (clic droit) : « Exporter en Markdown dans le projet » écrit dans <projet>/_conversations/<date>_<titre>_<id>.md, « Exporter en Markdown… » ouvre un sélecteur d'emplacement",
