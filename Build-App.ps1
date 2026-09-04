@@ -132,12 +132,16 @@ else {
 # 4. Compilation PyInstaller
 Write-Host "`n[4/4] Compilation avec PyInstaller..." -ForegroundColor Yellow
 
+# On embarque les assets fichier par fichier : splash-full.png (~4.5 Mo, pour
+# le README uniquement) n'a pas sa place dans l'executable.
 $PyInstallerArgs = @(
     "--noconfirm",
     "--windowed",
     "--name", "AntigravityManager",
     "--icon", "assets/icon.ico",
-    "--add-data", "assets;assets",
+    "--add-data", "assets/icon.png;assets",
+    "--add-data", "assets/icon.ico;assets",
+    "--add-data", "assets/splash.jpg;assets",
     "--add-data", "VERSION;.",
     # Pygments charge ses lexers/styles par import dynamique : sans cette
     # collecte, la coloration syntaxique de l'apercu de fichier serait muette

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QObject, QRunnable, QThreadPool, QByteArray, pyqtSignal as _Signal
-from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut, QTextCursor
+from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut, QTextCursor, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -685,6 +685,11 @@ class SettingsDialog(QDialog):
         btn_changelog.clicked.connect(self._open_changelog)
         btn_box.addWidget(btn_changelog)
 
+        btn_about = QPushButton("À propos")
+        btn_about.setToolTip("À propos d'Antigravity Manager")
+        btn_about.clicked.connect(self._open_about)
+        btn_box.addWidget(btn_about)
+
         btn_box.addStretch()
 
         btn_cancel = QPushButton("Annuler")
@@ -717,6 +722,9 @@ class SettingsDialog(QDialog):
         dlg = ChangelogDialog(self)
         dlg.show()
 
+    def _open_about(self):
+        AboutDialog(self).exec()
+
     def _trigger_reindex(self):
         """Demande à la fenêtre principale de reconstruire l'index."""
         parent = self.parent()
@@ -733,6 +741,62 @@ class SettingsDialog(QDialog):
         self.accept()
         if self.on_save_callback:
             self.on_save_callback()
+
+
+# =====================================================================
+# Boîte de Dialogue : À propos
+# =====================================================================
+GITHUB_URL = "https://github.com/cracky06/Antigravity_ProjectManagment"
+
+
+class AboutDialog(QDialog):
+    """Petite fenêtre « À propos » : illustration + version + lien GitHub."""
+
+    def __init__(self, parent: QMainWindow | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("À propos — Antigravity Manager")
+        self.setModal(True)
+        self.setFixedWidth(560)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 16)
+        layout.setSpacing(12)
+
+        pm = _get_splash_pixmap()
+        if pm is not None:
+            img = QLabel()
+            img.setPixmap(pm.scaledToWidth(560, Qt.TransformationMode.SmoothTransformation))
+            img.setScaledContents(False)
+            layout.addWidget(img)
+
+        version = get_app_version()
+        txt = QLabel(
+            f"<div style='text-align:center;'>"
+            f"<h2 style='margin:4px 0;'>Antigravity Manager</h2>"
+            f"<p style='margin:2px 0; color:#64748b;'>Version {version}</p>"
+            f"<p style='margin:8px 0;'>Exploration, organisation et export des "
+            f"conversations Google&nbsp;Antigravity.</p>"
+            f"<p style='margin:8px 0;'>"
+            f"<a href='{GITHUB_URL}'>{GITHUB_URL}</a></p>"
+            f"<p style='margin:8px 0; color:#94a3b8; font-size:11px;'>"
+            f"Développé avec l'assistance de Claude&nbsp;(Anthropic).</p>"
+            f"</div>"
+        )
+        txt.setOpenExternalLinks(True)
+        txt.setWordWrap(True)
+        txt.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(txt)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        btn_gh = QPushButton("🌐 Ouvrir GitHub")
+        btn_gh.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
+        row.addWidget(btn_gh)
+        btn_close = QPushButton("Fermer")
+        btn_close.clicked.connect(self.accept)
+        row.addWidget(btn_close)
+        row.addStretch()
+        layout.addLayout(row)
 
 
 # =====================================================================
@@ -812,21 +876,40 @@ class ChangelogDialog(QDialog):
 
 
 
-def _get_app_icon() -> QIcon:
-    """Retourne l'icône officielle de l'application depuis assets/."""
-    base_dirs = [
+def _asset_base_dirs() -> list[Path]:
+    """Emplacements possibles du dossier assets/ (dev, --onedir, --onefile)."""
+    dirs = [
         Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent,
         Path(__file__).parent,
     ]
     if hasattr(sys, "_MEIPASS"):
-        base_dirs.insert(0, Path(getattr(sys, "_MEIPASS")))
+        dirs.insert(0, Path(getattr(sys, "_MEIPASS")))
+    return dirs
 
-    for base in base_dirs:
-        for name in ("assets/icon.png", "assets/icon.ico", "icon.png", "icon.ico"):
+
+def _find_asset(*names: str) -> Path | None:
+    """Premier fichier existant parmi `names`, cherché dans les dossiers assets."""
+    for base in _asset_base_dirs():
+        for name in names:
             p = base / name
             if p.is_file():
-                return QIcon(str(p))
-    return QIcon()
+                return p
+    return None
+
+
+def _get_app_icon() -> QIcon:
+    """Retourne l'icône officielle de l'application depuis assets/."""
+    p = _find_asset("assets/icon.png", "assets/icon.ico", "icon.png", "icon.ico")
+    return QIcon(str(p)) if p else QIcon()
+
+
+def _get_splash_pixmap():
+    """Charge l'image d'accueil (assets/splash.jpg) si présente ; None sinon."""
+    p = _find_asset("assets/splash.jpg", "assets/splash.png", "splash.jpg")
+    if not p:
+        return None
+    pm = QPixmap(str(p))
+    return pm if not pm.isNull() else None
 
 
 # =====================================================================

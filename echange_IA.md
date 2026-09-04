@@ -12,7 +12,7 @@
 
 ## Tests Unitaires & Assurance Qualité
 - Framework : `pytest`
-- Emplacement : `tests/` (`test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`, `test_file_preview_nav.py`, `test_search_index.py`, `test_search_ui.py`) — 112 tests
+- Emplacement : `tests/` (`test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`, `test_file_preview_nav.py`, `test_search_index.py`, `test_search_ui.py`) — 114 tests
 - `tests/conftest.py` : fixture `isolated_search_index` (autouse) redirigeant l'index vers un fichier jetable et drainant `QThreadPool` avant/après chaque test
 - Exécution manuelle : `.\.venv\Scripts\pytest.exe -v`
 - Intégration Build : Exécution systématique à l'étape `[3/4]` de `Build-App.ps1` (annulation immédiate du build en cas d'échec).
@@ -32,7 +32,7 @@
 - Automatisation des tags : `.\scripts\release.ps1 [minor|major]`
 
 ## Spécificités Techniques
-- `VERSION` : fichier unique définissant la version officielle (`2.2`).
+- `VERSION` : fichier unique définissant la version officielle (`2.3`).
 - `config.py` : gère la persistance des chemins, du thème, de la version et du changelog structuré dans `config.json`. **[v1.7]** `get_ui_state()` / `save_ui_state()` : clé `ui_state` de `config.json` (`geometry` en base64, `splitter` `[int,int]`, `project_filter`), fusion partielle à l'écriture.
 - **[v1.5]** `search_index.py` : index de recherche plein-texte **SQLite FTS5**, stocké dans `search_index.db` à côté de `config.json` (gitignoré, reconstructible).
   - Schéma : table `docs(conv_id, mtime, project, title, body)` + table virtuelle `docs_fts` (`tokenize='unicode61 remove_diacritics 2'`) synchronisée par triggers.
@@ -53,8 +53,9 @@
   - Cache en mémoire `_CHAT_CACHE` invalidé par mtime pour affichage instantané des sessions répétées.
   - Extraction du workspace sécurisée : dé-échappement des sauts de ligne, exclusion des chemins internes (.gemini, brain, Temp), détection des `SearchPath` / `Cwd` et élimination des faux projets (`n`, `nLast`).
   - Rendu riche de fallback pour les sessions de sous-agents : affichage automatique des artéfacts markdown, des médias/images générés et du résumé des opérations techniques.
-- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v2.2) :
+- `antigravity_manager.py` : interface graphique moderne **PyQt6** (v2.3) :
   - Barre de titre avec numéro de version lu dynamiquement depuis `VERSION` via `get_app_version()` (jamais hard-codé).
+  - **[v2.3] Fenêtre « À propos »** : `_find_asset(*names)` cherche un asset (dev / `_MEIPASS` / à côté de l'exe) ; `_get_splash_pixmap()` charge `assets/splash.jpg`. `AboutDialog` (bouton dans `SettingsDialog`) : illustration + version + lien `GITHUB_URL`. Build : les assets sont embarqués fichier par fichier (`icon.png/ico`, `splash.jpg`) — `assets/splash-full.png` (~4.5 Mo, README uniquement) n'est PAS dans l'exe.
   - **[v2.2] Hooks de crash** : `_install_global_excepthooks()` (appelé dans `main()`) pose un `sys.excepthook`, un `threading.excepthook` et un `qInstallMessageHandler` (niveaux Critical/Fatal) → toute exception non gérée, y compris dans les slots Qt, est ajoutée à `crash.log` (`_append_crash_log`, mode append). `_crash_log_path()` factorisé.
   - **[v2.2] Menu contextuel sur les liens du chat** : `chat_browser` en `CustomContextMenu` → `_on_chat_context_menu` teste `anchorAt(pos)` ; sur un lien fichier : « Copier le lien », « Ouvrir le dossier parent » (`_open_parent_folder`), « Révéler dans l'Explorateur » (`_reveal_in_explorer`, `explorer /select,`). Sinon menu standard.
   - **[v2.2] Indexation au fil de l'eau** : `display_chat` lance un `_TouchIndexRunnable` (si index prêt et pas de sync en cours) → `search_index.touch_conversation(conv_id, project, title)` (ré)indexe cette seule conversation si son transcript a changé. Silencieux, sans signal.
@@ -85,7 +86,7 @@
   - Visionneuse de chat riche `QTextBrowser` avec rendu HTML/CSS adaptatif selon le thème sélectionné.
   - Menus contextuels complets (déplacement / réassignation vers un autre projet, suppression en cascade, copie ID, ouverture dossier brain/projet).
 - `assets/` : icône officielle du gestionnaire (`icon.png` 1024x1024 transparent, `icon.ico` multi-résolution).
-- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (112 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`), le fichier `VERSION` et `--collect-submodules pygments` (lexers/styles chargés dynamiquement, sinon la coloration de l'aperçu de fichier serait muette dans l'exe). **[v1.4]** La suppression de `build/` et `dist/` passe par `Remove-BuildDirectory` (6 réessais, délai 1 s) pour absorber les verrous transitoires posés par une fenêtre de l'Explorateur ou un watcher d'IDE.
+- `Build-App.ps1` / `build.bat` : automatise le nettoyage, la fermeture des processus actifs, la vérification du `.venv`, l'exécution des tests unitaires (114 tests) et le packaging PyInstaller avec l'icône intégrée (`--icon assets/icon.ico`), le fichier `VERSION` et `--collect-submodules pygments` (lexers/styles chargés dynamiquement, sinon la coloration de l'aperçu de fichier serait muette dans l'exe). **[v1.4]** La suppression de `build/` et `dist/` passe par `Remove-BuildDirectory` (6 réessais, délai 1 s) pour absorber les verrous transitoires posés par une fenêtre de l'Explorateur ou un watcher d'IDE.
 - `.gitattributes` : **[v1.4]** normalisation des fins de ligne (`VERSION`, `*.py`, `*.md`, `*.txt` en LF ; `*.ps1`, `*.bat` en CRLF ; `*.ico`/`*.png`/`*.pb` binaires). Supprime les avertissements « LF will be replaced by CRLF » à chaque commit.
-- `tests/` : `test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`, **[v1.4]** `test_file_preview_nav.py` (aperçu fichier, garde-fous, `_navigate_back`, pile `_nav_history`, raccourcis, compteur find bar), **[v1.5]** `test_search_index.py` (index FTS, 3 modes, sync incrémentale) + `test_search_ui.py` (toggles, mode effectif, résultat périmé) + `conftest.py`, +6 tests find bar regex/casse (v1.6), +11 tests robustesse (v1.7), +8 tests export Markdown + images + libellés + placement images (v2.0-2.1) + liens portables/index au fil de l'eau/crash hooks (v2.2). 112 tests au total.
+- `tests/` : `test_config.py`, `test_data_loader.py`, `test_ui_sanity.py`, **[v1.4]** `test_file_preview_nav.py` (aperçu fichier, garde-fous, `_navigate_back`, pile `_nav_history`, raccourcis, compteur find bar), **[v1.5]** `test_search_index.py` (index FTS, 3 modes, sync incrémentale) + `test_search_ui.py` (toggles, mode effectif, résultat périmé) + `conftest.py`, +6 tests find bar regex/casse (v1.6), +11 tests robustesse (v1.7), +8 tests export Markdown + images + libellés + placement images (v2.0-2.1) + liens portables/index au fil de l'eau/crash hooks (v2.2) + splash/About (v2.3). 114 tests au total.
 - `scripts/release.ps1` : calcul dynamique de la version et création du tag Git annoté.

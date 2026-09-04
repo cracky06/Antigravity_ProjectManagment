@@ -1,5 +1,7 @@
 # Antigravity Manager (Project & Chat Management)
 
+![Antigravity Manager](assets/splash-full.png)
+
 Application graphique indépendante permettant d'organiser, explorer et gérer les projets et conversations créés dans **Google Antigravity**.
 
 Reproduit l'interface latérale et la visionneuse de conversation d'Antigravity avec des fonctionnalités de gestion avancées.

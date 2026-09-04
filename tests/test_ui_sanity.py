@@ -57,3 +57,23 @@ def test_changelog_dialog_and_markdown_rendering(qapp):
     assert "<strong>Texte gras</strong>" in html
     assert "<li>Puce</li>" in html
 
+
+def test_about_dialog_and_splash_asset(qapp):
+    """AboutDialog s'instancie ; l'image d'accueil est trouvée dans assets/."""
+    from antigravity_manager import AboutDialog, _get_splash_pixmap, GITHUB_URL
+
+    pm = _get_splash_pixmap()
+    assert pm is not None and pm.width() > 0
+
+    dlg = AboutDialog()
+    assert "propos" in dlg.windowTitle()
+    assert GITHUB_URL.startswith("https://github.com/")
+    dlg.close()
+
+
+def test_find_asset_resolves_and_missing(qapp):
+    from antigravity_manager import _find_asset
+
+    assert _find_asset("assets/icon.png") is not None
+    assert _find_asset("assets/nexiste-pas.xyz") is None
+

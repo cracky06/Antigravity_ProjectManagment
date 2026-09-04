@@ -160,6 +160,12 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.3": {
+            "🎨 Identité Visuelle & Ergonomie (ui)": [
+                "Nouvelle fenêtre « À propos » (bouton dans les Paramètres) : illustration, version et lien vers le dépôt GitHub",
+                "Bandeau d'illustration ajouté au README du dépôt",
+            ],
+        },
         "v2.2": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Menu contextuel (clic droit) sur les liens de fichiers dans la vue discussion : copier le lien, ouvrir le dossier parent, révéler dans l'Explorateur",
