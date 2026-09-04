@@ -3,15 +3,14 @@
     Script de compilation et de distribution d'Antigravity Manager.
 .DESCRIPTION
     Nettoie les anciens artefacts, vérifie les dépendances et génère un exécutable autonome (.exe) avec PyInstaller.
+    Le mode de packaging (onefile, assets embarqués, allègements Qt) est décrit
+    dans le fichier versionné AntigravityManager.spec.
 .PARAMETER CleanOnly
     Si spécifié, nettoie uniquement les dossiers build et dist sans compiler.
-.PARAMETER OneDir
-    Si spécifié, génère un dossier avec dépendances au lieu d'un unique fichier .exe.
 #>
 [CmdletBinding()]
 param (
-    [switch]$CleanOnly,
-    [switch]$OneDir
+    [switch]$CleanOnly
 )
 
 Set-StrictMode -Version Latest
@@ -77,7 +76,9 @@ foreach ($Dir in $DirectoriesToClean) {
     }
 }
 
-Get-ChildItem -Path $ScriptDir -Filter "*.spec" | ForEach-Object {
+# Nettoyage des .spec generes a la volee (le spec versionne
+# AntigravityManager.spec est conserve).
+Get-ChildItem -Path $ScriptDir -Filter "_*.spec" | ForEach-Object {
     Write-Host "  Suppression de $($_.Name)..." -ForegroundColor Gray
     Remove-Item -Path $_.FullName -Force
 }
@@ -129,33 +130,23 @@ else {
     Write-Host "  Tous les tests unitaires ont ete valides avec succes !" -ForegroundColor Green
 }
 
-# 4. Compilation PyInstaller
+# 4. Compilation PyInstaller (depuis le .spec versionne)
 Write-Host "`n[4/4] Compilation avec PyInstaller..." -ForegroundColor Yellow
 
-# On embarque les assets fichier par fichier : splash-full.png (~4.5 Mo, pour
-# le README uniquement) n'a pas sa place dans l'executable.
-$PyInstallerArgs = @(
-    "--noconfirm",
-    "--windowed",
-    "--name", "AntigravityManager",
-    "--icon", "assets/icon.ico",
-    "--add-data", "assets/icon.png;assets",
-    "--add-data", "assets/icon.ico;assets",
-    "--add-data", "assets/splash.jpg;assets",
-    "--add-data", "VERSION;.",
-    # Pygments charge ses lexers/styles par import dynamique : sans cette
-    # collecte, la coloration syntaxique de l'apercu de fichier serait muette
-    # dans l'executable.
-    "--collect-submodules", "pygments",
-    "antigravity_manager.py"
-)
-
-if (-not $OneDir) {
-    $PyInstallerArgs += "--onefile"
+# AntigravityManager.spec porte : les --add-data (assets fichier par fichier,
+# splash-full.png exclu), --collect-submodules pygments, l'exclusion de
+# PyQt6.QtOpenGL* / PyQt6.QtPrintSupport, et le filtrage post-Analysis de
+# opengl32sw.dll (~20 Mo) + Qt6Pdf.dll (~4.5 Mo, export PDF via navigateur
+# headless desormais) + des traductions Qt (on ne garde que qtbase_fr.qm).
+# Toujours --onefile.
+$SpecPath = Join-Path -Path $ScriptDir -ChildPath "AntigravityManager.spec"
+if (-not (Test-Path -Path $SpecPath)) {
+    Write-Host "AntigravityManager.spec introuvable." -ForegroundColor Red
+    exit 1
 }
 
-Write-Host "  Execution de $PyInstallerCmd..." -ForegroundColor Gray
-& $PyInstallerCmd @PyInstallerArgs
+Write-Host "  Execution de $PyInstallerCmd (AntigravityManager.spec)..." -ForegroundColor Gray
+& $PyInstallerCmd --noconfirm $SpecPath
 
 if ($LASTEXITCODE -eq 0) {
     $ExePath = Join-Path -Path $ScriptDir -ChildPath "dist\AntigravityManager.exe"

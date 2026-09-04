@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
@@ -1469,6 +1470,80 @@ def export_conversation_to_path(
 ) -> tuple[bool, str]:
     """Écrit l'export Markdown à l'emplacement `out_path` choisi par l'utilisateur."""
     return _write_export(conv_id, Path(out_path), title, project)
+
+
+# ---------------------------------------------------------------------------
+# Export / archivage au niveau d'un PROJET
+# ---------------------------------------------------------------------------
+ProgressCB = "Callable[[int, int, str], None] | None"
+
+
+def export_project_conversations(
+    project_name: str, convs, dest_dir: "Path | None" = None, progress_cb=None
+) -> tuple[int, int, Path]:
+    """Exporte toutes les conversations `convs` en Markdown dans `dest_dir`.
+
+    `dest_dir` par défaut : `<racine projets>/<project_name>/_conversations/`.
+    `convs` : itérable d'objets ayant .conv_id / .title.
+    Retourne (nb_ok, nb_echecs, dest_dir).
+    """
+    if dest_dir is None:
+        dest_dir = get_projects_root() / project_name / "_conversations"
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    conv_list = list(convs)
+    ok = 0
+    fail = 0
+    for i, c in enumerate(conv_list):
+        title = getattr(c, "title", "") or ""
+        out_path = dest_dir / default_export_filename(c.conv_id, title)
+        success, _msg = _write_export(c.conv_id, out_path, title, project_name)
+        if success:
+            ok += 1
+        else:
+            fail += 1
+        if progress_cb:
+            progress_cb(i + 1, len(conv_list), c.conv_id)
+    logger.debug(
+        "export_project_conversations(%s) : %d ok / %d échecs -> %s",
+        project_name, ok, fail, dest_dir,
+    )
+    return ok, fail, dest_dir
+
+
+def archive_project(
+    project_name: str, convs, zip_path: "str | Path", progress_cb=None
+) -> tuple[bool, str]:
+    """Crée un ZIP contenant l'export Markdown (+ images) de toutes les
+    conversations du projet.
+
+    Le ZIP est écrit à `zip_path` (l'appelant s'assure qu'il est HORS du dossier
+    projet). Retourne (ok, message | chemin du zip).
+    """
+    zip_path = Path(zip_path)
+    try:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="agm_archive_") as tmp:
+            staging = Path(tmp) / project_name
+            ok, fail, _ = export_project_conversations(
+                project_name, convs, dest_dir=staging, progress_cb=progress_cb
+            )
+            zip_path.parent.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in sorted(staging.rglob("*")):
+                    if f.is_file():
+                        zf.write(f, f.relative_to(staging.parent))
+        logger.debug(
+            "archive_project(%s) : %d conv(s), %d échec(s) -> %s",
+            project_name, ok, fail, zip_path,
+        )
+        note = f" ({fail} échec(s))" if fail else ""
+        return True, f"{zip_path}{note}"
+    except Exception as exc:
+        logger.warning("Échec archivage %s : %s", project_name, exc)
+        return False, f"Échec de l'archivage : {exc}"
 
 
 

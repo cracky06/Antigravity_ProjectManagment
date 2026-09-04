@@ -61,6 +61,8 @@ from data_loader import (
     move_conversation,
     export_conversation_to_project,
     export_conversation_to_path,
+    export_project_conversations,
+    archive_project,
     default_export_filename,
     conversation_has_dialogue,
     derive_conv_label,
@@ -2629,6 +2631,25 @@ class AntigravityManagerWindow(QMainWindow):
             act_open.triggered.connect(lambda: self._open_project_folder(proj_name))
 
             menu.addSeparator()
+            n = len(convs)
+            act_exp_all = menu.addAction(
+                f"💾 Exporter les {n} conversation(s) en Markdown"
+            )
+            act_exp_all.setEnabled(n > 0)
+            act_exp_all.triggered.connect(
+                lambda checked=False, p=proj_name, cs=list(convs): self._export_project_all(p, cs)
+            )
+            act_pdf = menu.addAction("📄 Exporter le projet en PDF…")
+            act_pdf.setEnabled(n > 0)
+            act_pdf.triggered.connect(
+                lambda checked=False, p=proj_name, cs=list(convs): self._export_project_pdf(p, cs)
+            )
+            act_archive = menu.addAction("🗃️ Archiver (ZIP) et supprimer le projet")
+            act_archive.triggered.connect(
+                lambda checked=False, p=proj_name, cs=list(convs): self._archive_and_delete_project(p, cs)
+            )
+
+            menu.addSeparator()
             act_del = menu.addAction(f"🗑️ Supprimer '{proj_name}' et ses {len(convs)} conversation(s)")
             act_del.triggered.connect(lambda: self._delete_project(proj_name, convs))
 
@@ -2722,6 +2743,136 @@ class AntigravityManagerWindow(QMainWindow):
             self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
         else:
             QMessageBox.critical(self, "Échec de l'export", result)
+
+    # -----------------------------------------------------------------
+    # Export / archivage au niveau d'un PROJET
+    # -----------------------------------------------------------------
+    def _export_project_all(self, project_name: str, convs: list):
+        """Exporte toutes les conversations d'un projet dans son dossier
+        `_conversations/`."""
+        if not convs:
+            return
+        ret = QMessageBox.question(
+            self,
+            "Exporter le projet",
+            f"Exporter les {len(convs)} conversation(s) de « {project_name} » "
+            f"en Markdown dans :\n{get_projects_root() / project_name / '_conversations'}\n\n"
+            f"Les fichiers existants seront écrasés. Continuer ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        self.status_bar.showMessage(f"💾 Export de « {project_name} »…")
+        QApplication.processEvents()
+        ok, fail, dest = export_project_conversations(project_name, convs)
+        msg = f"💾 {ok} conversation(s) exportée(s) dans {dest}"
+        if fail:
+            msg += f" — {fail} échec(s)"
+        self.status_bar.showMessage(msg, 8000)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest)))
+
+    def _export_project_pdf(self, project_name: str, convs: list):
+        """Assemble toutes les conversations du projet dans un seul PDF."""
+        if not convs:
+            return
+        default_name = f"{project_name}_{__import__('datetime').datetime.now():%Y%m%d}.pdf"
+        suggested = str(get_projects_root() / project_name / default_name)
+        pdf_path, _ = QFileDialog.getSaveFileName(
+            self, "Exporter le projet en PDF", suggested, "Document PDF (*.pdf)"
+        )
+        if not pdf_path:
+            return
+
+        from pdf_export_html import export_project_to_pdf
+
+        self.status_bar.showMessage(
+            f"📄 Génération du PDF de « {project_name} » ({len(convs)} conv.)…"
+        )
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            ok, result = export_project_to_pdf(project_name, convs, pdf_path)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if ok:
+            self.status_bar.showMessage(f"📄 PDF créé : {result}", 8000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(result))
+        else:
+            QMessageBox.critical(self, "Échec de l'export PDF", result)
+
+    def _archive_and_delete_project(self, project_name: str, convs: list):
+        """Crée un ZIP de toutes les conversations (Markdown + images) PUIS
+        supprime le projet en cascade."""
+        default_name = (
+            f"{project_name}_archive_"
+            f"{__import__('datetime').datetime.now():%Y%m%d-%H%M%S}.zip"
+        )
+        # Suggestion : à côté du dossier projet (donc hors de ce qui sera supprimé).
+        suggested = str(get_projects_root() / default_name)
+        zip_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Archiver le projet — choisir l'emplacement du ZIP",
+            suggested,
+            "Archive ZIP (*.zip)",
+        )
+        if not zip_path:
+            return
+
+        # Garde-fou : le ZIP ne doit pas être DANS le dossier qu'on va supprimer.
+        proj_dir = (get_projects_root() / project_name).resolve()
+        try:
+            Path(zip_path).resolve().relative_to(proj_dir)
+            QMessageBox.warning(
+                self, "Emplacement invalide",
+                "Le ZIP ne peut pas être créé à l'intérieur du dossier du projet "
+                "(il serait supprimé avec lui). Choisissez un autre emplacement.",
+            )
+            return
+        except ValueError:
+            pass  # bien : le zip est en dehors
+
+        ret = QMessageBox.warning(
+            self,
+            "Archiver et supprimer",
+            f"⚠️ Cette action va :\n\n"
+            f"1. Créer une archive ZIP de {len(convs)} conversation(s) :\n   {zip_path}\n"
+            f"2. Puis SUPPRIMER définitivement le projet « {project_name} » "
+            f"(dossier disque + conversations Antigravity).\n\n"
+            f"Continuer ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        self.status_bar.showMessage(f"🗃️ Archivage de « {project_name} »…")
+        QApplication.processEvents()
+        ok, result = archive_project(project_name, convs, zip_path)
+        if not ok:
+            QMessageBox.critical(self, "Échec de l'archivage",
+                                 f"{result}\n\nLe projet N'A PAS été supprimé.")
+            return
+
+        # Archive OK -> suppression en cascade.
+        del_ok, del_msg = delete_project_cascade(
+            project_name, [c.conv_id for c in convs]
+        )
+        if del_ok:
+            QMessageBox.information(
+                self, "Projet archivé et supprimé",
+                f"Archive créée :\n{result}\n\n{del_msg}",
+            )
+            self.reload_data()
+        else:
+            QMessageBox.warning(
+                self, "Archive créée, suppression partielle",
+                f"Archive OK :\n{result}\n\nMais la suppression a rencontré des "
+                f"erreurs :\n{del_msg}",
+            )
+            self.reload_data()
 
     def _open_conv_brain(self, conv_id: str):
         brain_p = _find_brain_path(conv_id)

@@ -160,6 +160,18 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.4": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Clic droit sur un projet → « Exporter les N conversation(s) en Markdown » : exporte tout le projet dans son dossier _conversations/",
+                "Clic droit sur un projet → « Exporter le projet en PDF » : un seul PDF pour tout le projet (page de garde, table des matières, une section par conversation avec en-tête/pied de page, annexe des images non corrélées à un échange) — généré via Edge/Chrome en mode headless (aucune dépendance ajoutée à l'app)",
+                "La page de garde du PDF affiche automatiquement un visuel du projet s'il en trouve un dans ses dossiers assets (background, splash, logo, nom du projet ou icône .ico, dans cet ordre de préférence)",
+                "Clic droit sur un projet → « Archiver (ZIP) et supprimer le projet » : crée un ZIP de toutes les conversations (Markdown + images) puis supprime le projet — pour conserver l'historique après suppression",
+                "L'emplacement du ZIP est demandé (par défaut à côté du dossier projet) ; garde-fou empêchant de le placer dans le dossier qui va être supprimé",
+            ],
+            "⚡ Performance / distribution (perf)": [
+                "Exécutable allégé de ~37 Mo à ~25 Mo : suppression d'opengl32sw.dll (rasterizer logiciel inutile), de Qt6Pdf.dll (l'export PDF n'utilise plus le moteur PDF de Qt) et des traductions Qt non françaises",
+            ],
+        },
         "v2.3": {
             "🎨 Identité Visuelle & Ergonomie (ui)": [
                 "Nouvelle fenêtre « À propos » (bouton dans les Paramètres) : illustration, version et lien vers le dépôt GitHub",
