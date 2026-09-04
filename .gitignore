@@ -18,7 +18,9 @@ ENV/
 # PyInstaller / Build & Dist
 build/
 dist/
-*.spec
+# *.spec est VERSIONNÉ (AntigravityManager.spec) : filtrage Qt intégré.
+# On ignore seulement les .spec générés à la volée par un build ad hoc.
+_*.spec
 
 search_index.db*
 
