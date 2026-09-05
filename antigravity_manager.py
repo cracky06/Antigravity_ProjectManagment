@@ -1055,6 +1055,27 @@ def _antigravity_source_icon(dark: bool) -> QIcon:
     return QIcon(str(p)) if p else QIcon()
 
 
+def _apply_conv_item_icon(item: QTreeWidgetItem, c_info, dark: bool):
+    """Assigne l'icône Antigravity à l'item selon l'origine (App vs IDE).
+
+    - origin == 'app' -> logo Antigravity blanc en sombre / noir en clair
+      (_antigravity_source_icon(dark)).
+    - origin in ('ide', 'ide+app') -> logo Antigravity de l'autre couleur
+      (noir en sombre, blanc en clair, _antigravity_source_icon(not dark))
+      pour distinguer immédiatement App et IDE.
+    - origin == '' -> pas d'icône (laisser l'emoji 💬 seul).
+    """
+    orig = getattr(c_info, "origin", "")
+    if orig == "app":
+        icon = _antigravity_source_icon(dark)
+        if not icon.isNull():
+            item.setIcon(0, icon)
+    elif orig in ("ide", "ide+app"):
+        icon = _antigravity_source_icon(not dark)
+        if not icon.isNull():
+            item.setIcon(0, icon)
+
+
 def _claude_source_icon() -> QIcon:
     """Icône Claude (Claude Desktop `assets/claude.png`)."""
     p = _find_asset("assets/claude.png", "claude.png")
@@ -1868,9 +1889,11 @@ class AntigravityManagerWindow(QMainWindow):
                 label = derive_conv_label(c_info.conv_id, c_info.title or "")
                 if len(label) > 40:
                     label = label[:38] + "…"
+                origin = f"  •  [{c_info.origin_label}]" if getattr(c_info, "origin_label", "") else ""
                 time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
-                c_item = QTreeWidgetItem([f"💬  {label}  •  [⚠️ Sans projet]{time_suffix}"])
+                c_item = QTreeWidgetItem([f"💬  {label}  •  [⚠️ Sans projet]{origin}{time_suffix}"])
                 c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+                _apply_conv_item_icon(c_item, c_info, is_dark)
                 self.tree.addTopLevelItem(c_item)
 
             header_item.setExpanded(True)
@@ -1895,9 +1918,11 @@ class AntigravityManagerWindow(QMainWindow):
                 display_title = c_info.title if c_info.title else c_info.conv_id[:12]
                 if len(display_title) > 38:
                     display_title = display_title[:36] + "…"
+                origin = f"  •  [{c_info.origin_label}]" if getattr(c_info, "origin_label", "") else ""
                 time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
-                c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
+                c_item = QTreeWidgetItem([f"💬  {display_title}{origin}{time_suffix}"])
                 c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+                _apply_conv_item_icon(c_item, c_info, is_dark)
                 p_item.addChild(c_item)
 
             p_item.setExpanded(True)
@@ -1930,9 +1955,15 @@ class AntigravityManagerWindow(QMainWindow):
                 badge_txt = (
                     f"  •  [{c_info.project}]" if c_info.project else "  •  [⚠️ Sans projet]"
                 )
+            origin = (
+                f"  •  [{c_info.origin_label}]"
+                if getattr(c_info, "origin_label", "") and not badge
+                else ""
+            )
             time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
-            c_item = QTreeWidgetItem([f"💬  {label}{badge_txt}{time_suffix}"])
+            c_item = QTreeWidgetItem([f"💬  {label}{badge_txt}{origin}{time_suffix}"])
             c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+            _apply_conv_item_icon(c_item, c_info, is_dark)
             parent.addChild(c_item)
             return c_item
 
@@ -2945,8 +2976,15 @@ class AntigravityManagerWindow(QMainWindow):
                     )
                 else:
                     time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
-                c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
+                origin = (
+                    f"  •  [{c_info.origin_label}]"
+                    if getattr(c_info, "origin_label", "")
+                    else ""
+                )
+                c_item = QTreeWidgetItem([f"💬  {display_title}{origin}{time_suffix}"])
                 c_item.setData(0, Qt.ItemDataRole.UserRole, (conv_dtype, c_info))
+                if not is_claude:
+                    _apply_conv_item_icon(c_item, c_info, is_dark)
                 p_item.addChild(c_item)
 
             p_item.setExpanded(True)
