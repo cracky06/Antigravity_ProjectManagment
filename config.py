@@ -184,6 +184,9 @@ def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
         "v2.6": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Les conversations Antigravity portent un badge d'origine dans la barre latérale : [App] (application Antigravity) ou [IDE] (Antigravity IDE), avec le logo Antigravity en icône (fond blanc / fond noir) pour les distinguer d'un coup d'œil",
+            ],
             "🐛 Corrections (fix)": [
                 "Les conversations récentes de l'Antigravity IDE (stockées en base SQLite dans conversations/*.db, sans dossier brain/) s'affichaient vides : titre illisible, aucune date, aucun message. Elles sont désormais lues intégralement — titre, date, projet et dialogue complet",
             ],
