@@ -53,9 +53,19 @@ _ENTRYPOINT_LABELS = {
 
 
 def get_claude_projects_root() -> Path:
-    """Racine des transcripts Claude Code/Desktop : `~/.claude/projects/`."""
-    home = Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or Path.home())
-    return home / ".claude" / "projects"
+    """Racine des transcripts Claude Code/Desktop.
+
+    Configurable via les Paramètres (`config.claude_root`, défaut
+    `%USERPROFILE%\\.claude\\projects`). Repli sur le calcul direct si
+    `config` n'est pas importable (tests isolés).
+    """
+    try:
+        from config import get_claude_root
+
+        return get_claude_root()
+    except Exception:
+        home = Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or Path.home())
+        return home / ".claude" / "projects"
 
 
 def _decode_folder_name(folder: str) -> str:

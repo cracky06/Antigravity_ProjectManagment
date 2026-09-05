@@ -52,6 +52,7 @@ from config import (
     save_ui_state,
     DEFAULT_PROJECTS_ROOT,
     DEFAULT_ANTIGRAVITY_ROOT,
+    DEFAULT_CLAUDE_ROOT,
 )
 from data_loader import (
     build_project_map,
@@ -709,7 +710,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.on_save_callback = on_save_callback
         self.setWindowTitle("Paramètres — Dossiers sources & Thème")
-        self.setFixedSize(560, 372)
+        self.setFixedSize(560, 430)
         self.setModal(True)
 
         is_dark = get_active_theme() == "dark"
@@ -745,7 +746,20 @@ class SettingsDialog(QDialog):
         ag_row.addWidget(btn_browse_ag)
         layout.addLayout(ag_row)
 
-        # 3. Thème de l'interface
+        # 3. Dossier Claude Code (source « Claude Code / Desktop »). On affiche
+        # la valeur BRUTE de config.json (souvent %USERPROFILE%\.claude\projects)
+        # plutôt que le chemin résolu, cohérent avec le champ Antigravity.
+        layout.addWidget(QLabel("Dossier Claude Code (ex: %USERPROFILE%\\.claude\\projects) :"))
+        cc_row = QHBoxLayout()
+        self.claude_edit = QLineEdit(load_config().get("claude_root", DEFAULT_CLAUDE_ROOT))
+        self.claude_edit.setStyleSheet(input_style)
+        cc_row.addWidget(self.claude_edit)
+        btn_browse_cc = QPushButton("Parcourir…")
+        btn_browse_cc.clicked.connect(self._browse_claude)
+        cc_row.addWidget(btn_browse_cc)
+        layout.addLayout(cc_row)
+
+        # 4. Thème de l'interface
         layout.addWidget(QLabel("Thème de l'application :"))
         self.theme_combo = QComboBox()
         self.theme_combo.addItem("Système (Par défaut)", "system")
@@ -822,9 +836,18 @@ class SettingsDialog(QDialog):
         if d:
             self.ag_edit.setText(d)
 
+    def _browse_claude(self):
+        import os as _os
+
+        start = _os.path.expandvars(self.claude_edit.text()) or str(Path.home())
+        d = QFileDialog.getExistingDirectory(self, "Sélectionner le dossier Claude Code", start)
+        if d:
+            self.claude_edit.setText(d)
+
     def _reset_defaults(self):
         self.proj_edit.setText(str(DEFAULT_PROJECTS_ROOT))
         self.ag_edit.setText(str(DEFAULT_ANTIGRAVITY_ROOT))
+        self.claude_edit.setText(DEFAULT_CLAUDE_ROOT)
         self.theme_combo.setCurrentIndex(0)
 
     def _open_changelog(self):
@@ -845,6 +868,7 @@ class SettingsDialog(QDialog):
         cfg = load_config()
         cfg["projects_root"] = self.proj_edit.text().strip()
         cfg["antigravity_root"] = self.ag_edit.text().strip()
+        cfg["claude_root"] = self.claude_edit.text().strip() or DEFAULT_CLAUDE_ROOT
         cfg["theme"] = self.theme_combo.currentData()
         save_config(cfg)
         self.accept()
@@ -1716,6 +1740,38 @@ class AntigravityManagerWindow(QMainWindow):
                 p_item = _add_claude_project_item(claude_filter, convs)
                 self.tree.addTopLevelItem(p_item)
                 p_item.setExpanded(True)  # après insertion, sinon Qt ignore
+                return
+
+            # Aucune donnée : message explicite plutôt que 3 sections à (0).
+            if not self.claude_project_map:
+                from claude_code_loader import get_claude_projects_root
+
+                root = get_claude_projects_root()
+                exists = root.is_dir()
+                msg = (
+                    "Aucune conversation Claude Code trouvée dans ce dossier."
+                    if exists
+                    else "Dossier Claude Code introuvable."
+                )
+                it = QTreeWidgetItem([f"  ℹ️  {msg}"])
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                it.setForeground(0, header_color)
+                self.tree.addTopLevelItem(it)
+                hint = QTreeWidgetItem([
+                    "      Installez l'extension VS Code ou l'app Claude Desktop,"
+                    if not exists else
+                    "      Lancez une session Claude Code dans un projet pour la voir ici."
+                ])
+                hint.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                hint.setForeground(0, empty_color)
+                self.tree.addTopLevelItem(hint)
+                if not exists:
+                    hint2 = QTreeWidgetItem([
+                        f"      ou changez le dossier dans Paramètres ⚙️ (actuel : {root})."
+                    ])
+                    hint2.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    hint2.setForeground(0, empty_color)
+                    self.tree.addTopLevelItem(hint2)
                 return
 
             # Vue « Tous les projets » — 3 sections comme côté Antigravity.

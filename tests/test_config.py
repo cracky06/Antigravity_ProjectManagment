@@ -9,9 +9,11 @@ from config import (
     save_config,
     get_projects_root,
     get_antigravity_root,
+    get_claude_root,
     CONFIG_FILE,
     DEFAULT_PROJECTS_ROOT,
     DEFAULT_ANTIGRAVITY_ROOT,
+    DEFAULT_CLAUDE_ROOT,
 )
 
 
@@ -62,6 +64,32 @@ def test_get_roots_with_custom_config(tmp_path, monkeypatch):
 
     assert get_projects_root() == custom_p
     assert get_antigravity_root() == custom_ag
+
+
+def test_claude_root_default_is_literal_userprofile(tmp_path, monkeypatch):
+    """Le défaut de claude_root est stocké LITTÉRALEMENT (%USERPROFILE%…) et
+    résolu seulement à la lecture par get_claude_root()."""
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    assert DEFAULT_CLAUDE_ROOT == r"%USERPROFILE%\.claude\projects"
+    assert load_config()["claude_root"] == DEFAULT_CLAUDE_ROOT
+    # get_claude_root résout la variable d'environnement.
+    resolved = get_claude_root()
+    assert "%USERPROFILE%" not in str(resolved)
+    assert str(resolved).replace("\\", "/").endswith(".claude/projects")
+
+
+def test_get_claude_root_respects_custom_config(tmp_path, monkeypatch):
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    custom = tmp_path / "ailleurs" / "claude"
+    save_config({"claude_root": str(custom)})
+    assert get_claude_root() == custom
+
+
+def test_get_claude_root_expands_vars_in_custom_config(tmp_path, monkeypatch):
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setenv("MYVAR", str(tmp_path))
+    save_config({"claude_root": r"%MYVAR%\sub"})
+    assert get_claude_root() == tmp_path / "sub"
 
 
 def test_theme_functions(tmp_path, monkeypatch):

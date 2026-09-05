@@ -109,6 +109,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - **Thèmes Système / Sombre / Clair** avec bascule à chaud *(v1.0)*
 - **Fenêtre de paramètres** ⚙️ : dossiers sources, thème *(v1.0)*
 - Détection dynamique des dossiers par défaut (`E:\Dev`, `D:\DEV`… ; `.gemini/antigravity-ide` puis `.gemini/antigravity`) *(v1.0)*
+- Champ **« Dossier Claude Code »** configurable (défaut `%USERPROFILE%\.claude\projects`) pour les installations non standard *(v2.5)*
 - **Fenêtre de changelog** modeless automatique lors d'une nouvelle version *(v1.0)*
 - **Fenêtre « À propos »** (bouton dans les Paramètres) : illustration, version, lien GitHub *(v2.3)*
 - **Icône officielle** de l'application (barre latérale, barre de titre, barre des tâches Windows via AppUserModelID) *(v1.0)*
