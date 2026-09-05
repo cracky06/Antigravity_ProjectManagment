@@ -1339,7 +1339,9 @@ class AntigravityManagerWindow(QMainWindow):
         """Bascule entre la source Antigravity et Claude Code / Desktop (v2.5).
 
         Les deux arbres de données restent strictement séparés — on ne
-        mélange jamais les conversations des deux sources.
+        mélange jamais les conversations des deux sources. Le même
+        `project_filter_combo` est réutilisé pour les deux (repeuplé à
+        chaque bascule), pour une expérience de filtrage identique.
         """
         new_source = self.source_combo.currentData() or "antigravity"
         if new_source == self._active_source:
@@ -1349,12 +1351,6 @@ class AntigravityManagerWindow(QMainWindow):
         self._clear_chat()
 
         if new_source == "claude_code":
-            # Le filtre projet Antigravity n'a pas de sens pour cette source
-            # (arbre simple v1, pas de filtre équivalent) : on le masque
-            # plutôt que de le désactiver visible, pour ne pas laisser
-            # affichées ses statistiques Antigravity périmées.
-            if hasattr(self, "project_filter_combo"):
-                self.project_filter_combo.setVisible(False)
             self.status_bar.showMessage("Chargement des conversations Claude Code / Desktop…")
             self.claude_project_map = build_claude_project_map()
             n_conv = sum(len(v) for v in self.claude_project_map.values())
@@ -1362,50 +1358,84 @@ class AntigravityManagerWindow(QMainWindow):
                 f"✳️ Claude Code / Desktop : {len(self.claude_project_map)} projet(s), {n_conv} conversation(s)",
                 6000,
             )
-        else:
-            if hasattr(self, "project_filter_combo"):
-                self.project_filter_combo.setVisible(True)
 
+        self._refresh_project_filter_combo()
         self._populate_tree()
+
+    def _refresh_project_filter_combo(self, restore_saved: bool = False):
+        """Repeuple `project_filter_combo` avec les projets de la source
+        active. Antigravity : ALL / NONE (sans projet) / un par projet.
+        Claude Code : ALL / un par projet (pas de notion « sans projet »,
+        chaque session a toujours un `cwd`).
+
+        `restore_saved` : au tout premier chargement Antigravity, reprend le
+        dernier filtre enregistré dans `_ui_state` (aucune sélection courante
+        à ce stade sinon)."""
+        if not hasattr(self, "project_filter_combo"):
+            return
+        self.project_filter_combo.blockSignals(True)
+        cur_data = self.project_filter_combo.currentData()
+        if cur_data is None and restore_saved:
+            cur_data = self._ui_state.get("project_filter")
+        self.project_filter_combo.clear()
+
+        if self._active_source == "claude_code":
+            total_c = sum(len(v) for v in self.claude_project_map.values())
+            self.project_filter_combo.addItem(
+                f"📁 Tous les projets ({len(self.claude_project_map)} projs, {total_c} convs)", "ALL"
+            )
+            for p_name in sorted(self.claude_project_map.keys(), key=str.lower):
+                c_count = len(self.claude_project_map[p_name])
+                self.project_filter_combo.addItem(f"📁 {p_name} ({c_count})", p_name)
+        else:
+            total_c = len(self.all_convs)
+            no_proj = [c for c in self.all_convs if not c.project]
+            self.project_filter_combo.addItem(
+                f"📁 Tous les projets ({len(self.project_convs)} projs, {total_c} convs)", "ALL"
+            )
+            if no_proj:
+                self.project_filter_combo.addItem(f"⚠️ Sans projet ({len(no_proj)})", "NONE")
+            for p_name in sorted(self.project_convs.keys(), key=str.lower):
+                c_count = len(self.project_convs[p_name])
+                self.project_filter_combo.addItem(f"📁 {p_name} ({c_count})", p_name)
+
+        # Restaurer la sélection précédente si elle existe encore dans cette
+        # source (sinon on retombe sur "Tous les projets").
+        idx = 0
+        if cur_data:
+            for i in range(self.project_filter_combo.count()):
+                if self.project_filter_combo.itemData(i) == cur_data:
+                    idx = i
+                    break
+        self.project_filter_combo.setCurrentIndex(idx)
+        self.project_filter_combo.blockSignals(False)
 
     def reload_data(self):
         self._apply_theme()
+
+        # Le bouton 🔄 (et les actions de gestion Antigravity : suppression,
+        # déplacement, import…) appellent reload_data() sans savoir quelle
+        # source est active. Si Claude Code est la source affichée, on
+        # rafraîchit CETTE source plutôt que d'écraser la vue avec des
+        # données Antigravity qui ne correspondraient plus au sélecteur.
+        if self._active_source == "claude_code":
+            self.status_bar.showMessage("Actualisation Claude Code / Desktop…")
+            self.claude_project_map = build_claude_project_map()
+            self._refresh_project_filter_combo()
+            self._populate_tree()
+            n_conv = sum(len(v) for v in self.claude_project_map.values())
+            self.status_bar.showMessage(
+                f"✳️ Claude Code / Desktop : {len(self.claude_project_map)} projet(s), {n_conv} conversation(s)",
+                6000,
+            )
+            return
+
         projects_root, _, _, _, _ = get_paths()
         self.status_bar.showMessage("Chargement des données Antigravity…")
 
         self.project_convs, self.all_convs = build_project_map()
 
-        # Mettre à jour la boîte de filtre par projet
-        if hasattr(self, "project_filter_combo"):
-            self.project_filter_combo.blockSignals(True)
-            cur_data = self.project_filter_combo.currentData()
-            # Au tout premier chargement, aucune sélection courante : on reprend
-            # le dernier filtre projet enregistré.
-            if cur_data is None:
-                cur_data = self._ui_state.get("project_filter")
-            self.project_filter_combo.clear()
-
-            total_c = len(self.all_convs)
-            no_proj = [c for c in self.all_convs if not c.project]
-            
-            self.project_filter_combo.addItem(f"📁 Tous les projets ({len(self.project_convs)} projs, {total_c} convs)", "ALL")
-            if no_proj:
-                self.project_filter_combo.addItem(f"⚠️ Sans projet ({len(no_proj)})", "NONE")
-
-            for p_name in sorted(self.project_convs.keys(), key=str.lower):
-                c_count = len(self.project_convs[p_name])
-                self.project_filter_combo.addItem(f"📁 {p_name} ({c_count})", p_name)
-
-            # Restaurer sélection précédente si disponible
-            idx = 0
-            if cur_data:
-                for i in range(self.project_filter_combo.count()):
-                    if self.project_filter_combo.itemData(i) == cur_data:
-                        idx = i
-                        break
-            self.project_filter_combo.setCurrentIndex(idx)
-            self.project_filter_combo.blockSignals(False)
-
+        self._refresh_project_filter_combo(restore_saved=True)
         self._populate_tree()
 
         if self.selected_conv:
@@ -1487,13 +1517,12 @@ class AntigravityManagerWindow(QMainWindow):
         active_color = QColor("#f4f4f5" if is_dark else "#0f172a")
         empty_color = QColor("#71717a" if is_dark else "#94a3b8")
 
-        # Source Claude Code / Desktop (v2.5, lecture seule) : arbre simple à
-        # 2 niveaux (Projet -> conversations triées par date), volontairement
-        # sans les sections/filtre/badges de la vue Antigravity (cf. mémoire
-        # du choix de portée v1).
+        # Source Claude Code / Desktop (v2.5, lecture seule) : arbre Projet ->
+        # conversations (triées par date), respecte le filtre de
+        # project_filter_combo comme la vue Antigravity (ALL ou un projet).
+        # Pas de notion « sans projet » ici (chaque session a un `cwd`).
         if self._active_source == "claude_code":
-            for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
-                convs = self.claude_project_map[proj_name]
+            def _add_claude_project_item(proj_name: str, convs, *, expanded: bool) -> QTreeWidgetItem:
                 p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
                 p_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_project", proj_name, convs))
                 p_item.setForeground(0, active_color if convs else empty_color)
@@ -1507,7 +1536,28 @@ class AntigravityManagerWindow(QMainWindow):
                     c_item = QTreeWidgetItem([f"💬  {label}{origin}{time_suffix}"])
                     c_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_conv", c_info))
                     p_item.addChild(c_item)
-                self.tree.addTopLevelItem(p_item)
+                p_item.setExpanded(expanded)
+                return p_item
+
+            claude_filter = "ALL"
+            if hasattr(self, "project_filter_combo") and self.project_filter_combo.count() > 0:
+                claude_filter = self.project_filter_combo.currentData() or "ALL"
+
+            if claude_filter != "ALL" and claude_filter in self.claude_project_map:
+                convs = self.claude_project_map[claude_filter]
+                header_item = QTreeWidgetItem([f"PROJET : {claude_filter} ({len(convs)} convs)"])
+                header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                header_item.setForeground(0, header_color)
+                f = header_item.font(0)
+                f.setBold(True)
+                header_item.setFont(0, f)
+                self.tree.addTopLevelItem(header_item)
+                header_item.setExpanded(True)
+                self.tree.addTopLevelItem(_add_claude_project_item(claude_filter, convs, expanded=True))
+            else:
+                for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
+                    convs = self.claude_project_map[proj_name]
+                    self.tree.addTopLevelItem(_add_claude_project_item(proj_name, convs, expanded=False))
             return
 
         filter_val = "ALL"
