@@ -1,24 +1,37 @@
 """claude_code_loader.py — Source de données « Claude Code / Claude Desktop ».
 
-Lit les transcripts stockés localement par Claude Code et l'app Claude
-Desktop sous `~/.claude/projects/<dossier>/<session>.jsonl` — un format
-différent de celui d'Antigravity (protobuf + `transcript.jsonl` propriétaire) :
-JSONL avec des lignes typées (`user`, `assistant`, `ai-title`, `attachment`,
-`file-history-snapshot`, `queue-operation`, `bridge-session`, …), chaque
-message pointant sur son parent via `uuid`/`parentUuid`.
+Lit les transcripts des sessions **Claude Code** stockés localement sous
+`~/.claude/projects/<dossier>/<session>.jsonl` — un format différent de celui
+d'Antigravity (protobuf + `transcript.jsonl` propriétaire) : JSONL avec des
+lignes typées (`user`, `assistant`, `ai-title`, `attachment`,
+`file-history-snapshot`, `queue-operation`, `bridge-session`,
+`teleported-from`, …), chaque message pointant sur son parent via
+`uuid`/`parentUuid`.
 
-Portée v1 (lecture seule) : parcourir projets/conversations et afficher le
-dialogue (texte des blocs `text` des messages `user`/`assistant`). Pas
-d'export, pas d'indexation recherche, pas de déplacement/suppression — cf.
-`data_loader.py` pour ces fonctionnalités côté Antigravity, non répliquées
-ici pour l'instant.
+**Périmètre exact** : ces `.jsonl` couvrent les sessions Claude Code liées à
+un dossier de dev, qu'elles aient été lancées depuis l'extension VS Code OU
+depuis l'onglet « Code » de l'app Claude Desktop (les deux partagent
+`~/.claude/projects/` ; côté Claude Desktop on retrouve les mêmes UUID sous
+`…/Packages/Claude_*/…/Roaming/Claude/claude-code-sessions/<compte>/<org>/
+local_*.json`, qui ne contient que des métadonnées, le dialogue restant dans
+le `.jsonl` de `~/.claude/projects/`). En revanche le **chat « Home » de
+Claude Desktop** (conversations non liées à un dossier de code) n'est PAS
+stocké localement — il n'existe que côté serveur claude.ai — donc hors de
+portée de ce module (il faudrait un client API authentifié).
+
+Fonctionnalités : parité avec la source Antigravity — arbre 3 sections,
+filtre projet, recherche globale (`claude_search_index.py`), find bar locale,
+export Markdown (unitaire + en masse) et PDF. **Suppression/déplacement
+volontairement absents** : ce sont des fichiers gérés par Claude Code.
 
 Un « projet » = un dossier sous `~/.claude/projects/` ; son nom affiché est
 le dernier segment du `cwd` le plus fréquent parmi ses sessions (le nom de
-dossier lui-même est un slug illisible, ex. `e--Dev-Naturalchimie2`).
-Une « conversation » = un fichier `.jsonl` (une session) ; son titre est le
-dernier événement `ai-title` rencontré, à défaut le début du premier message
-utilisateur.
+dossier lui-même est un slug illisible, ex. `e--Dev-Naturalchimie2`). Une
+session sans aucun `cwd` (ex. `teleported-from`, démarrée ailleurs) mais
+avec un vrai message est conservée sous « (sans dossier local) … » ; sinon
+ignorée. Une « conversation » = un fichier `.jsonl` (une session) ; son titre
+est le dernier événement `ai-title` rencontré, à défaut le début du premier
+message utilisateur.
 """
 
 from __future__ import annotations

@@ -1673,13 +1673,15 @@ class AntigravityManagerWindow(QMainWindow):
         # RÉCENTES) quand le filtre est sur « Tous les projets », ou vue
         # projet unique quand un projet précis est sélectionné.
         if self._active_source == "claude_code":
-            def _add_claude_project_item(proj_name: str, convs, *, expanded: bool) -> QTreeWidgetItem:
+            def _add_claude_project_item(proj_name: str, convs) -> QTreeWidgetItem:
+                # NB : ne PAS appeler setExpanded ici — Qt l'ignore sur un item
+                # pas encore rattaché à l'arbre. L'appelant le fait APRÈS
+                # addTopLevelItem/addChild.
                 p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
                 p_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_project", proj_name, convs))
                 p_item.setForeground(0, active_color if convs else empty_color)
                 for c_info in convs:
                     _add_claude_conv_child(p_item, c_info)
-                p_item.setExpanded(expanded)
                 return p_item
 
             def _add_claude_conv_child(parent: QTreeWidgetItem, c_info, *, badge: bool = False):
@@ -1711,7 +1713,9 @@ class AntigravityManagerWindow(QMainWindow):
                 header_item.setFont(0, f)
                 self.tree.addTopLevelItem(header_item)
                 header_item.setExpanded(True)
-                self.tree.addTopLevelItem(_add_claude_project_item(claude_filter, convs, expanded=True))
+                p_item = _add_claude_project_item(claude_filter, convs)
+                self.tree.addTopLevelItem(p_item)
+                p_item.setExpanded(True)  # après insertion, sinon Qt ignore
                 return
 
             # Vue « Tous les projets » — 3 sections comme côté Antigravity.
@@ -1731,8 +1735,9 @@ class AntigravityManagerWindow(QMainWindow):
             proj_header_item = _make_section_header(f"PROJETS ({len(self.claude_project_map)})")
             for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
                 convs = self.claude_project_map[proj_name]
-                p_item = _add_claude_project_item(proj_name, convs, expanded=False)
-                proj_header_item.addChild(p_item)
+                proj_header_item.addChild(_add_claude_project_item(proj_name, convs))
+                # dossiers repliés par défaut en vue globale (état par défaut
+                # d'un QTreeWidgetItem, rien à forcer)
 
             # --- Section 2 : CONVERSATIONS HORS PROJET ---------------
             # Cas rare (session « teleported-from » sans cwd local, cf.
