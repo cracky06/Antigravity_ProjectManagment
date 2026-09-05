@@ -183,6 +183,11 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.6": {
+            "🐛 Corrections (fix)": [
+                "Les conversations récentes de l'Antigravity IDE (stockées en base SQLite dans conversations/*.db, sans dossier brain/) s'affichaient vides : titre illisible, aucune date, aucun message. Elles sont désormais lues intégralement — titre, date, projet et dialogue complet",
+            ],
+        },
         "v2.5": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Nouvelle source de données « Claude Code / Desktop » (sélecteur en haut de la barre latérale) : parcourt les conversations stockées localement par Claude Code (VS Code) et l'application Claude Desktop (~/.claude/projects/)",

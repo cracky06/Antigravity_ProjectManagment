@@ -129,6 +129,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 
 - Lecture résiliente en cas de fichier log ou metadata absent/corrompu *(v1.0)*
 - Découverte multi-dossiers `.gemini` (antigravity-ide / antigravity / antigravity-backup) *(v1.0)*
+- **Conversations récentes de l'Antigravity IDE** (stockées en base SQLite `conversations/*.db`, sans dossier `brain/`) désormais lues : titre, date, projet et dialogue complet — au lieu d'une entrée vide *(v2.6)*
 - Fix lecture du fichier `VERSION` en mode `--onefile` PyInstaller *(v1.2)*
 - **Journal de diagnostic optionnel** : `ANTIGRAVITY_MANAGER_DEBUG=1` → écrit `data_loader.log` *(v1.7)*
 - **`crash.log`** : capture globale des exceptions non gérées, y compris dans les gestionnaires d'événements Qt (clics, minuteries) *(v2.2)*
