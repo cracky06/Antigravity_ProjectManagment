@@ -2286,6 +2286,26 @@ class AntigravityManagerWindow(QMainWindow):
             """
         ]
 
+        # Bandeau discret si le dialogue ne vient pas d'un transcript complet.
+        _psrc = next((m.get("partial_source") for m in messages if m.get("partial_source")), None)
+        if _psrc:
+            _notes = {
+                "bridge": "Dialogue reconstruit à la volée via Antigravity (session au format hérité). "
+                          "L'horodatage par message n'est pas disponible.",
+                "transcript_partial": "Aperçu partiel : seules les dernières étapes de cette session "
+                                      "hérité ont un journal. Ouvrez-la dans Antigravity pour le dialogue complet.",
+                "overview": "Aperçu partiel reconstitué depuis un résumé de session. "
+                            "Le dialogue complet n'est pas disponible hors ligne.",
+            }
+            _bnr_bg = "#1e293b" if is_dark else "#fef9c3"
+            _bnr_col = "#cbd5e1" if is_dark else "#713f12"
+            _bnr_bd = "#334155" if is_dark else "#fde68a"
+            html_parts.append(
+                f"<div style=\"background:{_bnr_bg};color:{_bnr_col};border:1px solid {_bnr_bd};"
+                f"border-radius:6px;padding:6px 12px;margin-bottom:12px;font-size:11px;\">"
+                f"&#9432; {_notes.get(_psrc, _notes['overview'])}</div>"
+            )
+
         for msg in messages:
             role = msg.get("role")
             raw_text = msg.get("text", "").strip()

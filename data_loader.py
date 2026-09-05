@@ -463,8 +463,38 @@ def _find_ide_sqlite_db(conv_id: str):
         return None
 
 
-def _find_transcript_file(conv_id: str) -> Path | None:
-    """Trouve le fichier transcript pour une conversation (priorité à transcript.jsonl compact)."""
+def _transcript_is_complete(path: Path) -> bool:
+    """Vrai si le transcript couvre la conversation depuis le début.
+
+    Quand on rouvre une vieille conversation `.pb` dans Antigravity, l'app crée
+    un `transcript.jsonl` ne contenant QUE les nouvelles étapes (la 1re ligne
+    a un `step_index` > 0). Un tel transcript est trompeusement court : le vrai
+    dialogue est ailleurs (passerelle `language_server`). Un transcript complet
+    commence au `step_index` 0.
+    """
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    return int(json.loads(line).get("step_index", 0)) == 0
+                except Exception:
+                    return True  # pas de step_index : format ancien, on fait confiance
+    except OSError:
+        pass
+    return True
+
+
+def _find_transcript_file(conv_id: str, *, allow_partial: bool = False) -> Path | None:
+    """Trouve le fichier transcript d'une conversation.
+
+    `allow_partial=False` (défaut) : ignore un transcript rétro-créé partiel
+    (`step_index` initial > 0) — la passerelle donnera le dialogue complet.
+    `allow_partial=True` : accepte n'importe quel transcript (repli de dernier
+    recours quand la passerelle est indisponible).
+    """
     _, antigravity_root, brain_dir, _, _ = get_paths()
     dirs_to_check = [brain_dir / conv_id]
     gemini_parent = antigravity_root.parent
@@ -476,14 +506,68 @@ def _find_transcript_file(conv_id: str) -> Path | None:
     for b_dir in dirs_to_check:
         if not b_dir.is_dir():
             continue
-        # Priorité au transcript compact pour une vitesse maximale
-        t_compact = b_dir / ".system_generated" / "logs" / "transcript.jsonl"
-        if t_compact.is_file():
-            return t_compact
-        t_full = b_dir / ".system_generated" / "logs" / "transcript_full.jsonl"
-        if t_full.is_file():
-            return t_full
+        for name in ("transcript.jsonl", "transcript_full.jsonl"):
+            cand = b_dir / ".system_generated" / "logs" / name
+            if cand.is_file() and (allow_partial or _transcript_is_complete(cand)):
+                return cand
     return None
+
+
+def _find_overview_file(conv_id: str) -> Path | None:
+    """Localise `.system_generated/logs/overview.txt` — un EXTRAIT partiel du
+    transcript (mêmes lignes JSONL `USER_INPUT`/`PLANNER_RESPONSE`, mais pas
+    toutes les étapes). Certaines sessions historiques n'ont que ce fichier.
+    À n'utiliser qu'en repli, après le transcript complet et la passerelle.
+    """
+    _, antigravity_root, brain_dir, _, _ = get_paths()
+    gemini_parent = antigravity_root.parent
+    dirs = [brain_dir / conv_id]
+    for sibling in ("antigravity-ide", "antigravity", "antigravity-backup"):
+        alt = gemini_parent / sibling / "brain" / conv_id
+        if alt not in dirs:
+            dirs.append(alt)
+    for b_dir in dirs:
+        ov = b_dir / ".system_generated" / "logs" / "overview.txt"
+        if ov.is_file():
+            return ov
+    return None
+
+
+def _bridge_app_data_dir(conv_id: str) -> str:
+    """`app_data_dir` à passer au language_server pour cette conversation :
+    `antigravity-ide` si ses données vivent côté IDE, sinon `antigravity`."""
+    try:
+        return "antigravity-ide" if _detect_origin(conv_id) == "ide" else "antigravity"
+    except Exception:
+        return "antigravity"
+
+
+def _has_legacy_pb(conv_id: str) -> bool:
+    """Vrai s'il existe un fichier `conversations/<cid>.pb` — condition
+    nécessaire pour que la passerelle `language_server` ait quelque chose à
+    convertir. Évite de lancer PowerShell pour des `conv_id` sans `.pb`.
+    """
+    _, antigravity_root, _, _, _ = get_paths()
+    gemini_parent = antigravity_root.parent
+    for sub in ("antigravity", "antigravity-ide", "antigravity-backup"):
+        if (gemini_parent / sub / "conversations" / f"{conv_id}.pb").is_file():
+            return True
+    return False
+
+
+def _load_bridge_messages(conv_id: str) -> list[dict]:
+    """Dialogue via la passerelle `language_server` (conversations `.pb`
+    legacy opaques), `[]` si le serveur Antigravity n'est pas joignable ou
+    si la conversation n'a pas de fichier `.pb`."""
+    if not _has_legacy_pb(conv_id):
+        return []
+    try:
+        from antigravity_ls_bridge import load_bridge_messages
+
+        return load_bridge_messages(conv_id, _bridge_app_data_dir(conv_id))
+    except Exception as exc:
+        logger.debug("_load_bridge_messages(%s) : %s", conv_id, exc)
+        return []
 
 
 # Cache mémoire pour chargement instantané des messages déjà consultés
@@ -511,6 +595,37 @@ def conversation_has_dialogue(conv_id: str) -> bool:
                 return ide_sqlite_has_dialogue(db)
             except Exception as exc:
                 logger.debug("conversation_has_dialogue(%s) SQLite : %s", conv_id, exc)
+        # Repli : extrait overview.txt (au moins un échange visible).
+        overview = _find_overview_file(conv_id)
+        if overview is not None:
+            cached = _DIALOGUE_CACHE.get(conv_id)
+            try:
+                mtime = overview.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            if cached and cached[0] == mtime:
+                return cached[1]
+            hd = False
+            try:
+                with overview.open(encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        if '"USER_INPUT"' in line or '"PLANNER_RESPONSE"' in line:
+                            hd = True
+                            break
+            except OSError:
+                pass
+            _DIALOGUE_CACHE[conv_id] = (mtime, hd)
+            if hd:
+                return True
+        # Repli : passerelle language_server (conversations .pb legacy).
+        # Seulement s'il existe un .pb — sinon inutile de solliciter le serveur.
+        if _has_legacy_pb(conv_id):
+            cached = _DIALOGUE_CACHE.get(conv_id)
+            if cached is not None and cached[0] == 0.0:
+                return cached[1]
+            hd = bool(_load_bridge_messages(conv_id))
+            _DIALOGUE_CACHE[conv_id] = (0.0, hd)
+            return hd
         return False
     try:
         mtime = transcript.stat().st_mtime
@@ -670,6 +785,122 @@ def load_chat_messages(conv_id: str) -> list[dict]:
             except Exception as exc:
                 logger.warning("Lecture SQLite %s échouée : %s", db, exc)
 
+    # Repli passerelle : conversation legacy .pb opaque (ni transcript, ni
+    # SQLite). On interroge le language_server d'Antigravity s'il tourne.
+    if not messages and not (transcript and transcript.is_file()):
+        bridge_msgs = _load_bridge_messages(conv_id)
+        for m in bridge_msgs:
+            messages.append(
+                {
+                    "role": m["role"],
+                    "text": m["text"],
+                    "timestamp": m.get("timestamp", ""),
+                    "epoch": 0.0,
+                    "partial_source": "bridge",
+                }
+            )
+        # dialogue reconstruit : pas de mise en cache disque (le .pb n'a pas
+        # de mtime pertinent ici et le serveur peut renvoyer mieux plus tard).
+
+    # Repli transcript PARTIEL : Antigravity a rouvert la conversation et créé
+    # un transcript ne couvrant que les étapes récentes. Mieux que rien si la
+    # passerelle est indisponible.
+    if not messages:
+        partial = _find_transcript_file(conv_id, allow_partial=True)
+        if partial is not None:
+            try:
+                with partial.open(encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        if '"USER_INPUT"' not in line and '"PLANNER_RESPONSE"' not in line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        stype = obj.get("type")
+                        source = obj.get("source")
+                        content = obj.get("content", "")
+                        ts = obj.get("created_at", "")
+                        time_display = ""
+                        epoch = 0.0
+                        if ts:
+                            try:
+                                pdt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                time_display = pdt.strftime("%d/%m %H:%M")
+                                epoch = pdt.timestamp()
+                            except Exception:
+                                time_display = ts[:16]
+                        if stype == "USER_INPUT" and source == "USER_EXPLICIT":
+                            raw = content.strip()
+                            m = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", raw, re.DOTALL)
+                            text = m.group(1).strip() if m else raw
+                            text = re.sub(r"<[^>]+>", "", text).strip()
+                            if text and not text.startswith("The following is a summary"):
+                                messages.append({
+                                    "role": "user", "text": text,
+                                    "timestamp": time_display, "epoch": epoch,
+                                    "partial_source": "transcript_partial",
+                                })
+                        elif stype == "PLANNER_RESPONSE" and source == "MODEL":
+                            text = content.strip()
+                            if text:
+                                messages.append({
+                                    "role": "model", "text": text,
+                                    "timestamp": time_display, "epoch": epoch,
+                                    "partial_source": "transcript_partial",
+                                })
+            except Exception as exc:
+                logger.debug("Lecture transcript partiel %s échouée : %s", partial, exc)
+
+    # Repli overview.txt : EXTRAIT partiel du transcript (sessions historiques
+    # sans transcript complet ni serveur Antigravity disponible).
+    if not messages:
+        overview = _find_overview_file(conv_id)
+        if overview is not None:
+            try:
+                with overview.open(encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        if '"USER_INPUT"' not in line and '"PLANNER_RESPONSE"' not in line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        stype = obj.get("type")
+                        source = obj.get("source")
+                        content = obj.get("content", "")
+                        ts = obj.get("created_at", "")
+                        time_display = ""
+                        epoch = 0.0
+                        if ts:
+                            try:
+                                pdt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                time_display = pdt.strftime("%d/%m %H:%M")
+                                epoch = pdt.timestamp()
+                            except Exception:
+                                time_display = ts[:16]
+                        if stype == "USER_INPUT" and source == "USER_EXPLICIT":
+                            raw = content.strip()
+                            m = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", raw, re.DOTALL)
+                            text = m.group(1).strip() if m else raw
+                            text = re.sub(r"<[^>]+>", "", text).strip()
+                            if text and not text.startswith("The following is a summary"):
+                                messages.append({
+                                    "role": "user", "text": text,
+                                    "timestamp": time_display, "epoch": epoch,
+                                    "partial_source": "overview",
+                                })
+                        elif stype == "PLANNER_RESPONSE" and source == "MODEL":
+                            text = content.strip()
+                            if text:
+                                messages.append({
+                                    "role": "model", "text": text,
+                                    "timestamp": time_display, "epoch": epoch,
+                                    "partial_source": "overview",
+                                })
+            except Exception as exc:
+                logger.debug("Lecture overview.txt %s échouée : %s", overview, exc)
+
     # Si aucun message de log mais des artéfacts sont présents sur disque
     if not messages:
         brain_path = _find_brain_path(conv_id)
@@ -763,6 +994,52 @@ def get_transcript_info(conv_id: str):
                 last_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
             except Exception:
                 pass
+
+        # Repli overview.txt : titre + date depuis l'extrait JSONL.
+        overview = _find_overview_file(conv_id)
+        if overview is not None:
+            try:
+                ov_title, ov_last = "", None
+                with overview.open(encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        ts = obj.get("created_at")
+                        if ts:
+                            ov_last = ts
+                        if not ov_title and obj.get("type") == "USER_INPUT" \
+                                and obj.get("source") == "USER_EXPLICIT":
+                            raw = obj.get("content", "").strip()
+                            m = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", raw, re.DOTALL)
+                            txt = m.group(1).strip() if m else raw
+                            txt = re.sub(r"<[^>]+>", "", txt).strip()
+                            if txt and not txt.startswith("The following is a summary"):
+                                ov_title = txt.splitlines()[0].strip()[:80]
+                if ov_title:
+                    dt = None
+                    if ov_last:
+                        try:
+                            dt = datetime.fromisoformat(ov_last.replace("Z", "+00:00"))
+                        except Exception:
+                            pass
+                    return ov_title, dt or last_dt
+            except Exception as exc:
+                logger.debug("get_transcript_info(%s) overview : %s", conv_id, exc)
+
+        # Repli passerelle : titre depuis le language_server (date indisponible
+        # dans ce rendu -> on garde le mtime du brain/). Seulement si un .pb existe.
+        if _has_legacy_pb(conv_id):
+            try:
+                from antigravity_ls_bridge import bridge_first_user_title
+
+                bt = bridge_first_user_title(conv_id, _bridge_app_data_dir(conv_id))
+                if bt:
+                    return bt, last_dt
+            except Exception as exc:
+                logger.debug("get_transcript_info(%s) bridge : %s", conv_id, exc)
+
         return conv_id[:12], last_dt
 
     first_user_title = ""
