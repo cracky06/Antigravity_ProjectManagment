@@ -552,6 +552,64 @@ def _fallback_search(query: str, mode: str, scope_ids: set[str] | None) -> set[s
     return out
 
 
+class _ClaudeSearchRunnable(QRunnable):
+    """Équivalent de `_SearchRunnable` pour la source Claude Code / Desktop
+    (v2.5) — module d'index séparé (`claude_search_index`), jamais mélangé
+    avec la recherche Antigravity. Classe distincte plutôt que généraliser
+    `_SearchRunnable` : évite tout risque de régression sur la recherche
+    Antigravity existante en la laissant intacte."""
+
+    def __init__(self, generation: int, query: str, mode: str, scope, index_ready: bool):
+        """`scope` : set[str] (ids) si `index_ready`, sinon dict {id: ClaudeConv}
+        (le repli sans index a besoin du .path de chaque session)."""
+        super().__init__()
+        self.signals = _SearchSignals()
+        self._generation = generation
+        self._query = query
+        self._mode = mode
+        self._scope_ids = scope
+        self._index_ready = index_ready
+
+    def run(self) -> None:  # type: ignore[override]
+        import claude_search_index
+
+        try:
+            if self._index_ready:
+                found = claude_search_index.search(
+                    self._query, mode=self._mode, conv_ids=self._scope_ids
+                )
+            else:
+                found = _fallback_claude_search(self._query, self._mode, self._scope_ids)
+        except re.error as exc:
+            self.signals.failed.emit(self._generation, f"Regex invalide : {exc}")
+            return
+        except Exception as exc:  # pragma: no cover - garde-fou
+            self.signals.failed.emit(self._generation, f"Échec de la recherche : {exc}")
+            return
+        finally:
+            claude_search_index.close_thread_connection()
+        self.signals.finished.emit(self._generation, found)
+
+
+def _fallback_claude_search(query: str, mode: str, scope: dict | None) -> set[str]:
+    """Recherche sans index pour la source Claude Code : `scope` est un
+    mapping {conv_id: ClaudeConv} (il faut le `.path` de chaque session, pas
+    juste son id, pour relire le transcript)."""
+    if not scope:
+        return set()
+    rx = re.compile(query, re.IGNORECASE | re.MULTILINE) if mode == "regex" else None
+    needle = query.lower()
+    out: set[str] = set()
+    for cid, conv in scope.items():
+        body = "\n".join(m.get("text", "") for m in load_claude_messages(conv.path) if m.get("text"))
+        if rx is not None:
+            if rx.search(body):
+                out.add(cid)
+        elif needle in body.lower():
+            out.add(cid)
+    return out
+
+
 class _IndexSyncSignals(QObject):
     finished = _Signal(int, int, bool, str)  # (updated, deleted, ok, message)
 
@@ -575,6 +633,47 @@ class _IndexSyncRunnable(QRunnable):
             self.signals.finished.emit(0, 0, False, f"Échec de l'indexation : {exc}")
         finally:
             search_index.close_thread_connection()
+
+
+class _ClaudeIndexSyncRunnable(QRunnable):
+    """Équivalent de `_IndexSyncRunnable` pour la source Claude Code (v2.5)."""
+
+    def __init__(self, convs: list, rebuild: bool = False):
+        super().__init__()
+        self.signals = _IndexSyncSignals()
+        self._convs = convs
+        self._rebuild = rebuild
+
+    def run(self) -> None:  # type: ignore[override]
+        import claude_search_index
+
+        try:
+            fn = claude_search_index.rebuild_index if self._rebuild else claude_search_index.sync_index
+            updated, deleted = fn(self._convs)
+            status = claude_search_index.check_status()
+            self.signals.finished.emit(updated, deleted, status.ok, status.message)
+        except Exception as exc:  # pragma: no cover - garde-fou
+            self.signals.finished.emit(0, 0, False, f"Échec de l'indexation : {exc}")
+        finally:
+            claude_search_index.close_thread_connection()
+
+
+class _ClaudeTouchIndexRunnable(QRunnable):
+    """Indexe UNE conversation Claude Code au fil de l'eau (consultation)."""
+
+    def __init__(self, conv):
+        super().__init__()
+        self._conv = conv
+
+    def run(self) -> None:  # type: ignore[override]
+        import claude_search_index
+
+        try:
+            claude_search_index.touch_conversation(self._conv)
+        except Exception:  # pragma: no cover - ne doit jamais gêner l'affichage
+            pass
+        finally:
+            claude_search_index.close_thread_connection()
 
 
 class _TouchIndexRunnable(QRunnable):
@@ -991,6 +1090,10 @@ class AntigravityManagerWindow(QMainWindow):
         self._index_ready = False
         self._index_syncing = False
         self._shutting_down = False
+        # Index de recherche de la source Claude Code (v2.5) : état séparé,
+        # jamais mélangé avec _index_ready (Antigravity).
+        self._claude_index_ready = False
+        self._claude_index_syncing = False
         # Références fortes aux runnables en vol (sinon leurs QObject de signaux
         # peuvent être collectés avant l'émission -> RuntimeError).
         self._active_runnables: set = set()
@@ -1364,9 +1467,13 @@ class AntigravityManagerWindow(QMainWindow):
                 f"✳️ Claude Code / Desktop : {len(self.claude_project_map)} projet(s), {n_conv} conversation(s)",
                 6000,
             )
+            self._kick_off_claude_index_sync()
 
         self._refresh_project_filter_combo()
         self._populate_tree()
+        # Une recherche en cours ne correspond plus à la source affichée.
+        if hasattr(self, "search_input") and self.search_input.text().strip():
+            self.search_input.clear()
 
     def _refresh_project_filter_combo(self, restore_saved: bool = False):
         """Repeuple `project_filter_combo` avec les projets de la source
@@ -1515,6 +1622,43 @@ class AntigravityManagerWindow(QMainWindow):
         self._index_ready = False
         self.status_bar.showMessage("Reconstruction de l'index de recherche…", 4000)
         self._kick_off_index_sync(rebuild=True)
+
+    # -----------------------------------------------------------------
+    # Index plein-texte — source Claude Code / Desktop (v2.5)
+    # -----------------------------------------------------------------
+    def _kick_off_claude_index_sync(self, rebuild: bool = False):
+        all_convs = [c for convs in self.claude_project_map.values() for c in convs]
+        if self._claude_index_syncing or not all_convs:
+            return
+        import claude_search_index
+
+        status = claude_search_index.check_status()
+        if status.corrupt and not rebuild:
+            self.status_bar.showMessage(
+                f"⚠️ {status.message} — reconstruction automatique de l'index Claude Code…", 6000
+            )
+            rebuild = True
+
+        self._claude_index_syncing = True
+        self._claude_index_ready = status.ok and not status.corrupt
+        runnable = _ClaudeIndexSyncRunnable(all_convs, rebuild=rebuild)
+        self._active_runnables.add(runnable)
+        runnable.signals.finished.connect(self._on_claude_index_sync_finished)
+        runnable.signals.finished.connect(lambda *_: self._active_runnables.discard(runnable))
+        self._thread_pool.start(runnable)
+
+    def _on_claude_index_sync_finished(self, updated: int, deleted: int, ok: bool, message: str):
+        if self._shutting_down:
+            return
+        self._claude_index_syncing = False
+        self._claude_index_ready = ok
+        if ok:
+            if self.btn_mode_words.isChecked() and self.search_input.text().strip():
+                self._do_search()
+        else:
+            self.status_bar.showMessage(
+                f"⚠️ Index Claude Code indisponible : {message} — recherche en mode dégradé.", 8000
+            )
 
     def _populate_tree(self):
         self.tree.clear()
@@ -2037,8 +2181,9 @@ class AntigravityManagerWindow(QMainWindow):
         """Affiche une conversation Claude Code / Desktop (v2.5, lecture seule).
 
         Rendu volontairement plus simple que `display_chat` (pas d'historique
-        de navigation, pas d'indexation FTS, pas de mode source brut) — cf.
-        portée v1 documentée dans claude_code_loader.py.
+        de navigation, pas de mode source brut) — cf. portée v1 documentée
+        dans claude_code_loader.py. L'indexation FTS (v2.5) est au fil de
+        l'eau comme côté Antigravity : `_ClaudeTouchIndexRunnable`.
         """
         self.selected_claude_conv = conv
         self.chat_title.setText(conv.title or "Conversation sans titre")
@@ -2048,6 +2193,10 @@ class AntigravityManagerWindow(QMainWindow):
         self.btn_open_folder.setVisible(False)
         self.btn_toggle_raw.setVisible(False)
         self.btn_find_toggle.setVisible(False)
+
+        if not self._shutting_down and self._claude_index_ready and not self._claude_index_syncing:
+            r = _ClaudeTouchIndexRunnable(conv)
+            self._thread_pool.start(r)
 
         messages = load_claude_messages(conv.path)
         is_dark = get_active_theme() == "dark"
@@ -2513,12 +2662,14 @@ class AntigravityManagerWindow(QMainWindow):
             return
 
         mode = self._current_search_mode()
+        is_claude = self._active_source == "claude_code"
+        index_ready = self._claude_index_ready if is_claude else self._index_ready
         # Repli si « mots » demandé sans index : on rétrograde en « contient ».
         effective_mode = mode
-        if mode == "words" and not self._index_ready:
+        if mode == "words" and not index_ready:
             effective_mode = "substring"
 
-        scope = self._get_search_scope()
+        scope = self._get_claude_search_scope() if is_claude else self._get_search_scope()
         self._search_scope_by_id = {c.conv_id: c for c in scope}
         scope_ids = set(self._search_scope_by_id.keys())
 
@@ -2530,7 +2681,16 @@ class AntigravityManagerWindow(QMainWindow):
             f"dans {len(scope_ids)} conversation(s)…"
         )
 
-        runnable = _SearchRunnable(gen, query, effective_mode, scope_ids, self._index_ready)
+        if is_claude:
+            # Le repli sans index a besoin du .path de chaque session, pas
+            # seulement de son id -> on passe le mapping complet.
+            runnable = _ClaudeSearchRunnable(
+                gen, query, effective_mode,
+                scope_ids if index_ready else dict(self._search_scope_by_id),
+                index_ready,
+            )
+        else:
+            runnable = _SearchRunnable(gen, query, effective_mode, scope_ids, index_ready)
         self._active_runnables.add(runnable)
         runnable.signals.finished.connect(self._on_search_finished)
         runnable.signals.failed.connect(self._on_search_failed)
@@ -2587,6 +2747,16 @@ class AntigravityManagerWindow(QMainWindow):
             return self.project_convs[filter_val]
         return self.all_convs
 
+    def _get_claude_search_scope(self) -> list:
+        """Équivalent de `_get_search_scope` pour la source Claude Code."""
+        all_convs = [c for convs in self.claude_project_map.values() for c in convs]
+        if not hasattr(self, "project_filter_combo"):
+            return all_convs
+        filter_val = self.project_filter_combo.currentData() or "ALL"
+        if filter_val == "ALL":
+            return all_convs
+        return self.claude_project_map.get(filter_val, all_convs)
+
     def _populate_tree_search_results(
         self, results: dict[str, list[ConversationInfo]], query: str
     ):
@@ -2613,6 +2783,8 @@ class AntigravityManagerWindow(QMainWindow):
         header_item.setFont(0, f)
         self.tree.addTopLevelItem(header_item)
 
+        is_claude = self._active_source == "claude_code"
+        conv_dtype = "claude_conv" if is_claude else "conv"
         for proj_name, convs in sorted(results.items(), key=lambda x: x[0].lower()):
             p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
             p_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -2622,9 +2794,16 @@ class AntigravityManagerWindow(QMainWindow):
                 display_title = c_info.title if c_info.title else c_info.conv_id[:12]
                 if len(display_title) > 38:
                     display_title = display_title[:36] + "…"
-                time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
+                # ClaudeConv n'a pas de temps relatif ; on affiche sa date
+                # comme dans l'arbre normal de cette source.
+                if is_claude:
+                    time_suffix = (
+                        f"   {c_info.last_dt.strftime('%d/%m %H:%M')}" if c_info.last_dt else ""
+                    )
+                else:
+                    time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
                 c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
-                c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+                c_item.setData(0, Qt.ItemDataRole.UserRole, (conv_dtype, c_info))
                 p_item.addChild(c_item)
 
             p_item.setExpanded(True)

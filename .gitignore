@@ -23,6 +23,7 @@ dist/
 _*.spec
 
 search_index.db*
+claude_search_index.db*
 
 # Exports Markdown de conversations (générés par la fonctionnalité Export)
 _conversations/
