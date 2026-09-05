@@ -1647,6 +1647,20 @@ def build_conversation_markdown(
 
     messages = load_chat_messages(conv_id)
 
+    # Note de provenance si le dialogue ne vient pas d'un transcript complet
+    # (parité avec le bandeau de l'interface).
+    _psrc = next((m.get("partial_source") for m in messages if m.get("partial_source")), None)
+    if _psrc:
+        _note = {
+            "bridge": "> ℹ️ Dialogue reconstruit via Antigravity (session au format hérité). "
+                      "Pas d'horodatage par message.",
+            "transcript_partial": "> ℹ️ Aperçu partiel : seules les dernières étapes de cette session "
+                                  "ont un journal complet.",
+            "overview": "> ℹ️ Aperçu partiel reconstitué depuis un résumé de session.",
+        }.get(_psrc)
+        if _note:
+            lines.extend([_note, ""])
+
     # Racine du projet cible (pour rendre les liens fichiers portables).
     project_root: Path | None = None
     if project:
