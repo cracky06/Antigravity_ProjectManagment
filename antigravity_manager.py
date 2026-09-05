@@ -1045,6 +1045,20 @@ def _get_splash_pixmap():
     return pm if not pm.isNull() else None
 
 
+def _antigravity_source_icon(dark: bool) -> QIcon:
+    """Logo Antigravity (le même « A »/montagne, tracé sombre ou blanc selon
+    le thème pour rester lisible sur le fond du sélecteur)."""
+    name = "antigravity_white.svg" if dark else "antigravity_black.svg"
+    p = _find_asset(f"assets/{name}", name)
+    return QIcon(str(p)) if p else QIcon()
+
+
+def _claude_source_icon() -> QIcon:
+    """Icône Claude (Claude Desktop `assets/claude.png`)."""
+    p = _find_asset("assets/claude.png", "claude.png")
+    return QIcon(str(p)) if p else QIcon()
+
+
 # =====================================================================
 # Application Principale Antigravity Manager (PyQt6)
 # =====================================================================
@@ -1264,8 +1278,18 @@ class AntigravityManagerWindow(QMainWindow):
         self.source_combo = QComboBox()
         self.source_combo.setObjectName("sourceCombo")
         self.source_combo.setStyleSheet(combo_style)
-        self.source_combo.addItem("🌀 Antigravity", "antigravity")
-        self.source_combo.addItem("✳️ Claude Code / Desktop", "claude_code")
+        self.source_combo.setIconSize(QSize(16, 16))
+        _ag_icon = _antigravity_source_icon(is_dark)
+        _cc_icon = _claude_source_icon()
+        # Repli sur l'emoji si l'asset manque (build sans les svg/png).
+        if _ag_icon.isNull():
+            self.source_combo.addItem("🌀 Antigravity", "antigravity")
+        else:
+            self.source_combo.addItem(_ag_icon, "Antigravity", "antigravity")
+        if _cc_icon.isNull():
+            self.source_combo.addItem("✳️ Claude Code / Desktop", "claude_code")
+        else:
+            self.source_combo.addItem(_cc_icon, "Claude Code / Desktop", "claude_code")
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         sidebar_layout.addWidget(self.source_combo)
 

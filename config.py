@@ -89,12 +89,14 @@ def save_ui_state(state: dict) -> None:
 
 def get_projects_root() -> Path:
     cfg = load_config()
-    return Path(cfg.get("projects_root", DEFAULT_PROJECTS_ROOT))
+    return Path(os.path.expandvars(cfg.get("projects_root", DEFAULT_PROJECTS_ROOT)))
 
 
 def get_antigravity_root() -> Path:
+    # `os.path.expandvars` : sinon une valeur saisie avec `%USERPROFILE%\...`
+    # dans les Paramètres reste littérale et le dossier est introuvable.
     cfg = load_config()
-    return Path(cfg.get("antigravity_root", DEFAULT_ANTIGRAVITY_ROOT))
+    return Path(os.path.expandvars(cfg.get("antigravity_root", DEFAULT_ANTIGRAVITY_ROOT)))
 
 
 def get_claude_root() -> Path:
