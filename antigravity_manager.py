@@ -71,6 +71,7 @@ from data_loader import (
     _find_brain_path,
 )
 import search_index
+from claude_code_loader import build_claude_project_map, load_claude_messages
 
 try:
     import markdown
@@ -945,6 +946,12 @@ class AntigravityManagerWindow(QMainWindow):
         self.project_convs: dict[str, list[ConversationInfo]] = {}
         self.all_convs: list[ConversationInfo] = []
         self.selected_conv: ConversationInfo | None = None
+
+        # Source « Claude Code / Desktop » (v2.5, lecture seule) : arbre de
+        # données parallèle, jamais mélangé avec celui d'Antigravity.
+        self._active_source: str = "antigravity"   # "antigravity" | "claude_code"
+        self.claude_project_map: dict = {}
+        self.selected_claude_conv = None
         self.show_raw_markdown: bool = False
         self.changelog_dialog: ChangelogDialog | None = None
 
@@ -1111,15 +1118,27 @@ class AntigravityManagerWindow(QMainWindow):
 
         sidebar_layout.addLayout(search_row)
 
-        # Filtre par projet
-        self.project_filter_combo = QComboBox()
-        self.project_filter_combo.setObjectName("projectFilterCombo")
+        # Sélecteur de source de données (v2.5) : Antigravity ou Claude Code /
+        # Claude Desktop (~/.claude/projects/*.jsonl, lecture seule pour l'instant
+        # — cf. claude_code_loader.py). Change ce que _populate_tree affiche.
         is_dark = get_active_theme() == "dark"
-        self.project_filter_combo.setStyleSheet(
+        combo_style = (
             "padding: 5px 8px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 6px; color: #f4f4f5; font-size: 12px;"
             if is_dark
             else "padding: 5px 8px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; color: #0f172a; font-size: 12px;"
         )
+        self.source_combo = QComboBox()
+        self.source_combo.setObjectName("sourceCombo")
+        self.source_combo.setStyleSheet(combo_style)
+        self.source_combo.addItem("🌀 Antigravity", "antigravity")
+        self.source_combo.addItem("✳️ Claude Code / Desktop", "claude_code")
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        sidebar_layout.addWidget(self.source_combo)
+
+        # Filtre par projet
+        self.project_filter_combo = QComboBox()
+        self.project_filter_combo.setObjectName("projectFilterCombo")
+        self.project_filter_combo.setStyleSheet(combo_style)
         self.project_filter_combo.currentIndexChanged.connect(self._on_filter_changed)
         sidebar_layout.addWidget(self.project_filter_combo)
 
@@ -1316,6 +1335,39 @@ class AntigravityManagerWindow(QMainWindow):
         else:
             self._populate_tree()
 
+    def _on_source_changed(self):
+        """Bascule entre la source Antigravity et Claude Code / Desktop (v2.5).
+
+        Les deux arbres de données restent strictement séparés — on ne
+        mélange jamais les conversations des deux sources.
+        """
+        new_source = self.source_combo.currentData() or "antigravity"
+        if new_source == self._active_source:
+            return
+        self._active_source = new_source
+        self.selected_claude_conv = None
+        self._clear_chat()
+
+        if new_source == "claude_code":
+            # Le filtre projet Antigravity n'a pas de sens pour cette source
+            # (arbre simple v1, pas de filtre équivalent) : on le masque
+            # plutôt que de le désactiver visible, pour ne pas laisser
+            # affichées ses statistiques Antigravity périmées.
+            if hasattr(self, "project_filter_combo"):
+                self.project_filter_combo.setVisible(False)
+            self.status_bar.showMessage("Chargement des conversations Claude Code / Desktop…")
+            self.claude_project_map = build_claude_project_map()
+            n_conv = sum(len(v) for v in self.claude_project_map.values())
+            self.status_bar.showMessage(
+                f"✳️ Claude Code / Desktop : {len(self.claude_project_map)} projet(s), {n_conv} conversation(s)",
+                6000,
+            )
+        else:
+            if hasattr(self, "project_filter_combo"):
+                self.project_filter_combo.setVisible(True)
+
+        self._populate_tree()
+
     def reload_data(self):
         self._apply_theme()
         projects_root, _, _, _, _ = get_paths()
@@ -1434,6 +1486,29 @@ class AntigravityManagerWindow(QMainWindow):
         header_color = QColor("#a1a1aa" if is_dark else "#64748b")
         active_color = QColor("#f4f4f5" if is_dark else "#0f172a")
         empty_color = QColor("#71717a" if is_dark else "#94a3b8")
+
+        # Source Claude Code / Desktop (v2.5, lecture seule) : arbre simple à
+        # 2 niveaux (Projet -> conversations triées par date), volontairement
+        # sans les sections/filtre/badges de la vue Antigravity (cf. mémoire
+        # du choix de portée v1).
+        if self._active_source == "claude_code":
+            for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
+                convs = self.claude_project_map[proj_name]
+                p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
+                p_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_project", proj_name, convs))
+                p_item.setForeground(0, active_color if convs else empty_color)
+                for c_info in convs:
+                    label = c_info.title or c_info.conv_id[:12]
+                    if len(label) > 40:
+                        label = label[:38] + "…"
+                    origin = f"  •  [{c_info.origin_label}]" if c_info.origin_label else ""
+                    date_str = c_info.last_dt.strftime("%d/%m %H:%M") if c_info.last_dt else ""
+                    time_suffix = f"   {date_str}" if date_str else ""
+                    c_item = QTreeWidgetItem([f"💬  {label}{origin}{time_suffix}"])
+                    c_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_conv", c_info))
+                    p_item.addChild(c_item)
+                self.tree.addTopLevelItem(p_item)
+            return
 
         filter_val = "ALL"
         if hasattr(self, "project_filter_combo") and self.project_filter_combo.count() > 0:
@@ -1572,7 +1647,9 @@ class AntigravityManagerWindow(QMainWindow):
         if dtype == "conv":
             c_info: ConversationInfo = data[1]
             self.display_chat(c_info)
-        elif dtype == "project":
+        elif dtype == "claude_conv":
+            self.display_claude_chat(data[1])
+        elif dtype in ("project", "claude_project"):
             # Si on clique sur le projet, on bascule son expansion
             if item.childCount() > 0:
                 item.setExpanded(not item.isExpanded())
@@ -1591,6 +1668,10 @@ class AntigravityManagerWindow(QMainWindow):
                 # Navigation au clavier : on ne pollue pas l'historique du bouton ←
                 # (seuls un clic explicite, un résultat de recherche ou un lien empilent).
                 self.display_chat(c_info, record_history=False)
+        elif dtype == "claude_conv":
+            c_info = data[1]
+            if not self.selected_claude_conv or self.selected_claude_conv.conv_id != c_info.conv_id:
+                self.display_claude_chat(c_info)
 
     def _toggle_markdown_mode(self):
         """Bascule entre la vue riche HTML et le mode markdown source brut (<>)."""
@@ -1895,6 +1976,124 @@ class AntigravityManagerWindow(QMainWindow):
         self._set_chat_html(full_html)
         # Pré-remplir la find bar si recherche globale active
         self._prefill_find_from_search()
+
+    def display_claude_chat(self, conv):
+        """Affiche une conversation Claude Code / Desktop (v2.5, lecture seule).
+
+        Rendu volontairement plus simple que `display_chat` (pas d'historique
+        de navigation, pas d'indexation FTS, pas de mode source brut) — cf.
+        portée v1 documentée dans claude_code_loader.py.
+        """
+        self.selected_claude_conv = conv
+        self.chat_title.setText(conv.title or "Conversation sans titre")
+        date_str = conv.last_dt.strftime("%d/%m/%Y à %H:%M") if conv.last_dt else "Date inconnue"
+        origin = f" • {conv.origin_label}" if conv.origin_label else ""
+        self.chat_meta.setText(f"📁 {conv.project}   •   {date_str}{origin}   •   ID: {conv.conv_id}")
+        self.btn_open_folder.setVisible(False)
+        self.btn_toggle_raw.setVisible(False)
+        self.btn_find_toggle.setVisible(False)
+
+        messages = load_claude_messages(conv.path)
+        is_dark = get_active_theme() == "dark"
+
+        if not messages:
+            info_col = "#a1a1aa" if is_dark else "#475569"
+            sub_col = "#71717a" if is_dark else "#64748b"
+            self._set_chat_html(f"""
+            <div style="text-align: center; margin-top: 60px; font-family: sans-serif;">
+                <p style="font-size: 24px;">ℹ️</p>
+                <p style="font-size: 14px; font-weight: bold; color: {info_col};">Aucun message textuel dans cette session.</p>
+                <p style="font-size: 12px; color: {sub_col};">Session probablement technique (queue/bridge) sans dialogue.</p>
+            </div>
+            """)
+            return
+
+        if is_dark:
+            body_bg, body_col = "#18181b", "#e4e4e7"
+            user_bg, user_border, user_title_col, user_text_col = "#27272a", "#3f3f46", "#60a5fa", "#ffffff"
+            model_bg, model_border, model_title_col, model_text_col = "#18181b", "#8b5cf6", "#a78bfa", "#e4e4e7"
+            pre_bg, pre_border, pre_col = "#121215", "#27272a", "#38bdf8"
+            code_bg, code_col = "#27272a", "#38bdf8"
+            hr_col, time_col = "#27272a", "#71717a"
+        else:
+            body_bg, body_col = "#ffffff", "#0f172a"
+            user_bg, user_border, user_title_col, user_text_col = "#f0f9ff", "#bae6fd", "#0284c7", "#0f172a"
+            model_bg, model_border, model_title_col, model_text_col = "#ffffff", "#7c3aed", "#6d28d9", "#1e293b"
+            pre_bg, pre_border, pre_col = "#f8fafc", "#e2e8f0", "#0369a1"
+            code_bg, code_col = "#f1f5f9", "#0369a1"
+            hr_col, time_col = "#e2e8f0", "#64748b"
+
+        html_parts = [f"""<!DOCTYPE html><html><head><style>
+            body {{ background-color: {body_bg}; color: {body_col};
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    font-size: 13px; line-height: 1.45; margin: 0; padding: 10px; }}
+            .msg-container {{ margin-bottom: 14px; }}
+            .user-box {{ background-color: {user_bg}; border: 1px solid {user_border};
+                         border-radius: 8px; padding: 8px 14px; margin-bottom: 8px; }}
+            .user-header {{ font-weight: bold; color: {user_title_col}; font-size: 12px; margin: 0 0 1px 0; }}
+            .model-box {{ background-color: {model_bg}; border-left: 3px solid {model_border};
+                          padding: 2px 14px; margin-bottom: 10px; }}
+            .model-header {{ font-weight: bold; color: {model_title_col}; font-size: 12px; margin: 0 0 1px 0; }}
+            .msg-body {{ line-height: 1.4; }}
+            .time-tag {{ color: {time_col}; font-weight: normal; font-size: 11px; float: right; }}
+            h1, h2, h3, h4 {{ margin-top: 10px; margin-bottom: 4px; color: {model_title_col}; }}
+            h1 {{ font-size: 16px; border-bottom: 1px solid {hr_col}; padding-bottom: 3px; }}
+            h2 {{ font-size: 15px; border-bottom: 1px solid {hr_col}; padding-bottom: 2px; }}
+            h3 {{ font-size: 14px; }} h4 {{ font-size: 13px; }}
+            p {{ margin: 2px 0; }} ul, ol {{ margin: 2px 0; padding-left: 20px; }} li {{ margin-bottom: 1px; }}
+            strong {{ font-weight: bold; }}
+            blockquote {{ border-left: 3px solid {model_border}; margin: 6px 0; padding: 4px 10px; color: {time_col}; }}
+            table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
+            th, td {{ border: 1px solid {hr_col}; padding: 5px 8px; text-align: left; }}
+            th {{ background-color: {pre_bg}; font-weight: bold; }}
+            pre {{ background-color: {pre_bg}; border: 1px solid {pre_border}; border-radius: 6px;
+                   padding: 10px; font-family: 'Consolas', 'Fira Code', monospace; font-size: 12px;
+                   color: {pre_col}; white-space: pre-wrap; word-wrap: break-word; }}
+            code {{ background-color: {code_bg}; padding: 2px 4px; border-radius: 4px;
+                    font-family: 'Consolas', monospace; font-size: 12px; color: {code_col};
+                    white-space: pre-wrap; word-wrap: break-word; }}
+            a {{ color: {model_title_col}; word-wrap: break-word; }}
+        </style></head><body>"""]
+
+        for msg in messages:
+            role = msg.get("role")
+            raw_text = msg.get("text", "").strip()
+            ts = msg.get("timestamp", "")
+            time_html = f"<span class='time-tag'>{ts}</span>" if ts else ""
+
+            def _escape_pre(text: str) -> str:
+                escaped = (
+                    text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                )
+                return escaped.replace("\n", "<br>")
+
+            if markdown:
+                try:
+                    formatted = markdown.markdown(raw_text, extensions=["fenced_code", "tables", "nl2br"])
+                except Exception:
+                    formatted = _escape_pre(raw_text)
+            else:
+                formatted = _escape_pre(raw_text)
+
+            _stripped = formatted.strip()
+            if _stripped.startswith("<p>") and _stripped.endswith("</p>") and _stripped.count("<p>") == 1:
+                formatted = _stripped[3:-4]
+
+            if role == "user":
+                html_parts.append(f"""
+                <div class="msg-container"><div class="user-box">
+                    <div class="user-header">👤 Utilisateur {time_html}</div>
+                    <div class="msg-body" style="color: {user_text_col};">{formatted}</div>
+                </div></div>""")
+            elif role == "assistant":
+                html_parts.append(f"""
+                <div class="msg-container"><div class="model-box">
+                    <div class="model-header">✳️ Claude {time_html}</div>
+                    <div class="msg-body" style="color: {model_text_col};">{formatted}</div>
+                </div></div>""")
+
+        html_parts.append("</body></html>")
+        self._set_chat_html("".join(html_parts))
 
     def _set_chat_html(self, html: str):
         """Charge le HTML dans le navigateur et remet le curseur au début SANS
@@ -2623,6 +2822,10 @@ class AntigravityManagerWindow(QMainWindow):
             return
 
         dtype = data[0]
+        if dtype in ("claude_project", "claude_conv"):
+            # Source Claude Code / Desktop : lecture seule pour l'instant (v2.5),
+            # aucune action de gestion (export/déplacement/suppression) exposée.
+            return
         menu = QMenu(self)
 
         if dtype == "project":

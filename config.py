@@ -160,6 +160,12 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.5": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Nouvelle source de données « Claude Code / Desktop » (sélecteur en haut de la barre latérale) : parcourt les conversations stockées localement par Claude Code (VS Code) et l'application Claude Desktop (~/.claude/projects/), en lecture seule pour l'instant",
+                "Arbre Projet → conversations (triées par date), avec titre, badge d'origine (VS Code / Desktop) et date ; le dialogue s'affiche avec le même rendu visuel riche que la vue Antigravity",
+            ],
+        },
         "v2.4": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Clic droit sur un projet → « Exporter les N conversation(s) en Markdown » : exporte tout le projet dans son dossier _conversations/",

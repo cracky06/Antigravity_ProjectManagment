@@ -19,6 +19,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Section HORS PROJET : n'affiche que les conversations avec un vrai dialogue (sessions techniques des sous-agents ignorées) *(v2.0)*
 - Conversations sans titre : affichage `<id> — <1re ligne d'un artéfact>` (task.md / walkthrough.md) *(v2.0)*
 - **Interlignage resserré** (arborescence plus dense) *(v1.9)*
+- **Sélecteur de source** : bascule entre Antigravity et Claude Code / Claude Desktop (lecture seule) — parcourt les conversations stockées localement par Claude Code (VS Code) et l'app Claude Desktop, arbre Projet → conversations avec badge d'origine et date *(v2.5)*
 
 ---
 
