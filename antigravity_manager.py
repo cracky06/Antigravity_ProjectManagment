@@ -1727,7 +1727,7 @@ class AntigravityManagerWindow(QMainWindow):
             all_claude_convs = [c for convs in self.claude_project_map.values() for c in convs]
 
             # --- Section 1 : PROJETS ---------------------------------
-            proj_header_item = _make_section_header("PROJETS")
+            proj_header_item = _make_section_header(f"PROJETS ({len(self.claude_project_map)})")
             for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
                 convs = self.claude_project_map[proj_name]
                 p_item = _add_claude_project_item(proj_name, convs, expanded=False)
@@ -1746,13 +1746,14 @@ class AntigravityManagerWindow(QMainWindow):
                 _add_claude_conv_child(orphan_header_item, c_info)
 
             # --- Section 3 : CONVERSATIONS RÉCENTES -------------------
-            recent_header_item = _make_section_header("CONVERSATIONS RÉCENTES")
+            # Limitée à 40 -> le compteur reflète ce qui est réellement listé.
             recent_sorted = sorted(
                 all_claude_convs,
                 key=lambda c: c.last_dt or __import__("datetime").datetime.min,
                 reverse=True,
-            )
-            for c_info in recent_sorted[:40]:
+            )[:40]
+            recent_header_item = _make_section_header(f"CONVERSATIONS RÉCENTES ({len(recent_sorted)})")
+            for c_info in recent_sorted:
                 _add_claude_conv_child(recent_header_item, c_info, badge=True)
 
             proj_header_item.setExpanded(True)
@@ -1848,7 +1849,7 @@ class AntigravityManagerWindow(QMainWindow):
             return c_item
 
         # --- Section 1 : PROJETS -------------------------------------------
-        proj_header_item = _make_section_header("PROJETS")
+        proj_header_item = _make_section_header(f"PROJETS ({len(self.project_convs)})")
         for proj_name in sorted(self.project_convs.keys(), key=str.lower):
             convs = self.project_convs[proj_name]
             count = len(convs)
@@ -1878,8 +1879,11 @@ class AntigravityManagerWindow(QMainWindow):
             _add_conv_child(orphan_header_item, c_info)
 
         # --- Section 3 : CONVERSATIONS RÉCENTES (repliée par défaut) -------
-        recent_header_item = _make_section_header("CONVERSATIONS RÉCENTES")
-        for c_info in self.all_convs[:40]:
+        # Limitée à 40 -> le compteur reflète ce qui est réellement listé,
+        # pas le total de conversations toutes sources confondues.
+        recent_convs = self.all_convs[:40]
+        recent_header_item = _make_section_header(f"CONVERSATIONS RÉCENTES ({len(recent_convs)})")
+        for c_info in recent_convs:
             _add_conv_child(recent_header_item, c_info, badge=True)
 
         proj_header_item.setExpanded(True)
@@ -2242,7 +2246,7 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_meta.setText(f"📁 {conv.project}   •   {date_str}{origin}   •   ID: {conv.conv_id}")
         self.btn_open_folder.setVisible(False)
         self.btn_toggle_raw.setVisible(False)
-        self.btn_find_toggle.setVisible(False)
+        self.btn_find_toggle.setVisible(True)
 
         if not self._shutting_down and self._claude_index_ready and not self._claude_index_syncing:
             r = _ClaudeTouchIndexRunnable(conv)
@@ -2349,6 +2353,7 @@ class AntigravityManagerWindow(QMainWindow):
 
         html_parts.append("</body></html>")
         self._set_chat_html("".join(html_parts))
+        self._prefill_find_from_search()
 
     def _set_chat_html(self, html: str):
         """Charge le HTML dans le navigateur et remet le curseur au début SANS
@@ -2881,8 +2886,12 @@ class AntigravityManagerWindow(QMainWindow):
         self._show_find_bar(prefill=q)
 
     def _show_find_bar(self, prefill: str = ""):
-        """Affiche la barre de recherche locale. Pré-remplit optionnellement le champ."""
-        if not self.selected_conv:
+        """Affiche la barre de recherche locale. Pré-remplit optionnellement le champ.
+
+        Fonctionne pour les deux sources : `_recompute_find_matches` opère
+        directement sur `self.chat_browser.document()`, sans distinction —
+        seul un contenu affiché (Antigravity OU Claude Code) est requis."""
+        if not self.selected_conv and not self.selected_claude_conv:
             return
         self.find_bar.setVisible(True)
         if prefill and self.find_input.text() != prefill:
