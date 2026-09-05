@@ -15,11 +15,14 @@ def _detect_default_projects_root() -> str:
 
 
 def _detect_default_antigravity_root() -> str:
-    # Priorité à antigravity-ide (Antigravity 2.0 / version actuelle)
-    ide_path = Path(os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity-ide"))
-    if ide_path.is_dir():
-        return str(ide_path)
-    return os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity")
+    # Priorité à antigravity-ide (Antigravity 2.0 / version actuelle).
+    # On renvoie la forme LITTÉRALE (%USERPROFILE%…), comme DEFAULT_CLAUDE_ROOT :
+    # c'est ce qui s'affiche/s'enregistre dans les Paramètres, et
+    # `get_antigravity_root()` résout la variable à la lecture. Sinon la
+    # variable disparaît dès la première sauvegarde de config.json.
+    if Path(os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity-ide")).is_dir():
+        return r"%USERPROFILE%\.gemini\antigravity-ide"
+    return r"%USERPROFILE%\.gemini\antigravity"
 
 
 DEFAULT_PROJECTS_ROOT = _detect_default_projects_root()

@@ -42,7 +42,6 @@ from config import (
     load_config,
     save_config,
     get_projects_root,
-    get_antigravity_root,
     get_active_theme,
     get_app_version,
     get_last_seen_version,
@@ -724,10 +723,13 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        # 1. Racine des Projets
+        # 1. Racine des Projets. On affiche la valeur BRUTE de config.json
+        # (qui peut contenir %USERPROFILE%…) et non le chemin résolu, sinon
+        # les variables d'environnement disparaissent à chaque réouverture.
+        _cfg0 = load_config()
         layout.addWidget(QLabel("Répertoire racine des projets (ex: E:\\Dev) :"))
         p_row = QHBoxLayout()
-        self.proj_edit = QLineEdit(str(get_projects_root()))
+        self.proj_edit = QLineEdit(_cfg0.get("projects_root", str(DEFAULT_PROJECTS_ROOT)))
         self.proj_edit.setStyleSheet(input_style)
         p_row.addWidget(self.proj_edit)
         btn_browse_p = QPushButton("Parcourir…")
@@ -735,10 +737,10 @@ class SettingsDialog(QDialog):
         p_row.addWidget(btn_browse_p)
         layout.addLayout(p_row)
 
-        # 2. Racine Antigravity
+        # 2. Racine Antigravity — idem : valeur brute du config, pas résolue.
         layout.addWidget(QLabel("Dossier Antigravity IDE (ex: %USERPROFILE%\\.gemini\\antigravity-ide) :"))
         ag_row = QHBoxLayout()
-        self.ag_edit = QLineEdit(str(get_antigravity_root()))
+        self.ag_edit = QLineEdit(_cfg0.get("antigravity_root", str(DEFAULT_ANTIGRAVITY_ROOT)))
         self.ag_edit.setStyleSheet(input_style)
         ag_row.addWidget(self.ag_edit)
         btn_browse_ag = QPushButton("Parcourir…")
