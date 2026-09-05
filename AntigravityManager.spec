@@ -24,9 +24,15 @@ a = Analysis(
         ('assets/icon.png', 'assets'),
         ('assets/icon.ico', 'assets'),
         ('assets/splash.jpg', 'assets'),
+        # v2.5 : icônes du sélecteur de source (Antigravity clair/sombre, Claude)
+        ('assets/antigravity_black.svg', 'assets'),
+        ('assets/antigravity_white.svg', 'assets'),
+        ('assets/claude.png', 'assets'),
         ('VERSION', '.'),
     ],
-    hiddenimports=[],
+    # QtSvg : jamais importé dans le code Python, mais requis pour que QIcon
+    # rende les .svg du sélecteur de source (plugin iconengines/qsvgicon).
+    hiddenimports=['PyQt6.QtSvg'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -158,10 +158,15 @@ def _iter_asset_dirs(proj_root: Path):
     yield proj_root
 
 
-def _find_cover_image(project_name: str) -> Path | None:
-    """Cherche une image « évidente » à afficher sous le titre du projet."""
+def _find_cover_image(project_name: str, project_root: Path | None = None) -> Path | None:
+    """Cherche une image « évidente » à afficher sous le titre du projet.
+
+    `project_root` : racine réelle du projet, à fournir explicitement quand
+    il n'existe pas de « racine des projets » centralisée (ex. source
+    Claude Code — le projet est identifié par son `cwd`, pas par un nom
+    résolu sous `get_projects_root()`)."""
     try:
-        proj_root = get_projects_root() / project_name
+        proj_root = project_root or (get_projects_root() / project_name)
     except Exception:
         return None
 
@@ -584,4 +589,134 @@ def export_project_to_pdf(project_name: str, convs, pdf_path: str | Path) -> tup
         return True, str(pdf_path)
     except Exception as exc:
         logger.warning("Échec export PDF %s : %s", project_name, exc)
+        return False, f"Échec de l'export PDF : {exc}"
+
+
+# --- Export PDF — source Claude Code / Desktop (v2.5) -----------------------
+# Réutilise l'infrastructure source-agnostique de ce module (détection
+# navigateur, impression, CSS @page, cover image) ; le corps par conversation
+# est en revanche dédié (pas de corrélation d'images — Claude Code ne
+# génère pas d'images dans ces transcripts, contrairement à Antigravity).
+def _claude_conversation_body_html(conv) -> tuple[str, str]:
+    """Retourne (titre_affiché, html_de_la_section) pour une ClaudeConv."""
+    from claude_code_loader import load_claude_messages
+    from data_loader import _sanitize_message_text
+
+    disp = conv.title or conv.conv_id[:12]
+    date_str = conv.last_dt.strftime("%Y-%m-%d %H:%M") if conv.last_dt else "date inconnue"
+    origin = f" — {conv.origin_label}" if conv.origin_label else ""
+
+    parts = [
+        '<div class="conv-section">',
+        f"<h2>{_html.escape(disp)}</h2>",
+        f'<p class="lead">ID <code>{conv.conv_id}</code> — {date_str}{origin}</p>',
+    ]
+
+    messages = load_claude_messages(conv.path)
+    if messages:
+        for msg in messages:
+            is_user = msg.get("role") == "user"
+            cls = "msg-user" if is_user else "msg-model"
+            who = "user" if is_user else "model"
+            name = "👤 Utilisateur" if is_user else "✳️ Claude"
+            ts = msg.get("timestamp", "")
+            body = _md_to_html(
+                _sanitize_message_text((msg.get("text", "") or "").rstrip(), conv.project_root)
+            )
+            parts.append(
+                f'<div class="{cls}"><div class="who {who}">{name}'
+                f'<span class="ts"> · {_html.escape(ts)}</span></div>{body}</div>'
+            )
+    else:
+        parts.append("<p><em>Aucun message textuel dans cette session.</em></p>")
+
+    parts.append("</div>")
+    return disp, "".join(parts)
+
+
+def _build_claude_full_html(project_name: str, convs, export_date: str) -> tuple[str, int]:
+    """Équivalent de `_build_full_html` pour la source Claude Code — pas
+    d'annexe d'images (aucune à corréler pour cette source)."""
+    conv_list = list(convs)
+
+    toc_items = []
+    for i, c in enumerate(conv_list, 1):
+        toc_items.append(f"<li>{i}. {_html.escape(c.title or c.conv_id[:12])}</li>")
+
+    sections: list[str] = []
+    for c in conv_list:
+        _disp, body_html = _claude_conversation_body_html(c)
+        sections.append(body_html)
+
+    header_text = _html.escape(project_name)
+    project_root = conv_list[0].project_root if conv_list else None
+    cover_img_path = _find_cover_image(project_name, project_root) if project_root else None
+    cover_img_uri = _image_data_uri(cover_img_path, _COVER_MAX_WIDTH) if cover_img_path else None
+    cover_img_html = f'<img class="cover-img" src="{cover_img_uri}"/>' if cover_img_uri else ""
+
+    html = f"""<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<style>
+  :root {{ --hdr: "{header_text}"; --date: "{_html.escape(export_date)}"; }}
+  {_PAGE_CSS}
+  .cover {{ page: cover; height: 297mm; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; text-align: center;
+            font-family: 'Segoe UI', Arial, sans-serif; break-after: page; }}
+  .cover h1 {{ font-size: 30pt; color: #6d28d9; margin: 0 0 10pt 0; }}
+  .cover p {{ color: #64748b; font-size: 12pt; margin: 2pt 0; }}
+  .cover-img {{ max-width: {_COVER_MAX_WIDTH}px; max-height: 120mm; margin: 4pt 0 14pt 0;
+                border-radius: 8px; }}
+  .toc {{ break-after: page; }}
+</style>
+{_BODY_CSS}
+</head>
+<body>
+  <div class="cover">
+    <h1>{_html.escape(project_name)}</h1>
+    {cover_img_html}
+    <p>{len(conv_list)} conversation(s)</p>
+    <p>Exporté le {_html.escape(export_date)}</p>
+  </div>
+  <div class="toc">
+    <h1>Table des matières</h1>
+    <ol>{"".join(toc_items)}</ol>
+  </div>
+  {"".join(sections)}
+</body>
+</html>"""
+    return html, len(conv_list)
+
+
+def export_claude_project_to_pdf(project_name: str, convs, pdf_path: str | Path) -> tuple[bool, str]:
+    """Génère le PDF de toutes les conversations Claude Code `convs` d'un
+    projet (même moteur Edge/Chromium headless que `export_project_to_pdf`).
+
+    Retourne (ok, chemin | message).
+    """
+    pdf_path = Path(pdf_path)
+    try:
+        browser = _find_browser()
+        if not browser:
+            return False, (
+                "Aucun navigateur (Edge/Chrome) détecté sur cette machine. "
+                "L'export PDF nécessite Microsoft Edge ou Google Chrome installé."
+            )
+
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        export_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+        html, _n = _build_claude_full_html(project_name, convs, export_date)
+
+        with tempfile.TemporaryDirectory(prefix="antigravity_pdf_html_") as tmpdir:
+            html_path = Path(tmpdir) / "export.html"
+            html_path.write_text(html, encoding="utf-8")
+            ok, msg = _html_to_pdf(html_path, pdf_path, browser)
+            if not ok:
+                return False, f"Échec de l'export PDF : {msg}"
+
+        logger.debug("PDF projet Claude Code %s -> %s (html/%s)", project_name, pdf_path, Path(browser).name)
+        return True, str(pdf_path)
+    except Exception as exc:
+        logger.warning("Échec export PDF Claude Code %s : %s", project_name, exc)
         return False, f"Échec de l'export PDF : {exc}"

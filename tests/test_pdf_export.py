@@ -253,3 +253,75 @@ def test_wait_for_stable_file_times_out_when_never_written(tmp_path):
 
     target = tmp_path / "never.pdf"
     assert pe._wait_for_stable_file(target, timeout_s=0.3, poll_s=0.05) is False
+
+
+# --- Export PDF — source Claude Code / Desktop (v2.5) -----------------------
+class _ClaudeConvStub:
+    def __init__(self, conv_id, title, project, project_root, path="dummy.jsonl"):
+        self.conv_id = conv_id
+        self.title = title
+        self.project = project
+        self.project_root = project_root
+        self.path = path
+        self.last_dt = None
+        self.origin_label = "VS Code"
+
+
+@pytest.fixture
+def claude_stub(monkeypatch, tmp_path):
+    import pdf_export_html as pe
+
+    msgs = {
+        "cc1": [
+            {"role": "user", "text": "Salut", "timestamp": "10:00", "epoch": 100.0},
+            {"role": "assistant", "text": "Bonjour **toi**.", "timestamp": "10:01", "epoch": 110.0},
+        ],
+    }
+    monkeypatch.setattr("claude_code_loader.load_claude_messages", lambda path: list(msgs.get(str(path), msgs.get(path, []))))
+    return pe
+
+
+def test_claude_pdf_is_generated(claude_stub, fake_browser, tmp_path):
+    conv = _ClaudeConvStub("cc1", "Titre Test", "MonProjet", tmp_path, path="cc1")
+    out = tmp_path / "projet.pdf"
+    ok, res = claude_stub.export_claude_project_to_pdf("MonProjet", [conv], out)
+    assert ok is True
+    assert out.is_file()
+    assert out.read_bytes()[:5] == b"%PDF-"
+
+
+def test_claude_pdf_empty_project_list(claude_stub, fake_browser, tmp_path):
+    out = tmp_path / "vide.pdf"
+    ok, res = claude_stub.export_claude_project_to_pdf("Vide", [], out)
+    assert ok is True
+    assert out.read_bytes()[:5] == b"%PDF-"
+
+
+def test_claude_pdf_no_browser_found(claude_stub, monkeypatch, tmp_path):
+    monkeypatch.setattr(claude_stub, "_find_browser", lambda: None)
+    conv = _ClaudeConvStub("cc1", "T", "P", tmp_path, path="cc1")
+    ok, msg = claude_stub.export_claude_project_to_pdf("P", [conv], tmp_path / "x.pdf")
+    assert ok is False
+    assert "navigateur" in msg.lower()
+
+
+def test_claude_conversation_body_html_renders_markdown(claude_stub, tmp_path):
+    conv = _ClaudeConvStub("cc1", "Titre Test", "MonProjet", tmp_path, path="cc1")
+    disp, html = claude_stub._claude_conversation_body_html(conv)
+    assert disp == "Titre Test"
+    assert "Bonjour" in html
+    assert "<strong>toi</strong>" in html
+    assert "Utilisateur" in html
+    assert "Claude" in html
+
+
+def test_build_claude_full_html_contains_sections(claude_stub, tmp_path):
+    conv = _ClaudeConvStub("cc1", "Titre Test", "MonProjet", tmp_path, path="cc1")
+    html, n = claude_stub._build_claude_full_html("MonProjet", [conv], "2026-01-15 10:00")
+    assert n == 1
+    assert "MonProjet" in html
+    assert "Table des matières" in html
+    assert "conv-section" in html
+    assert "@page" in html
+    # Pas d'annexe images pour cette source (aucune corrélation d'images).
+    assert "Annexe" not in html

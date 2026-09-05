@@ -38,7 +38,30 @@ def test_settings_dialog_instantiation(qapp):
     assert dlg.windowTitle().startswith("Paramètres")
     assert dlg.proj_edit.text() != ""
     assert dlg.ag_edit.text() != ""
+    # v2.5 : champ « Dossier Claude Code »
+    assert dlg.claude_edit.text() != ""
+    dlg._reset_defaults()
+    assert dlg.claude_edit.text() == r"%USERPROFILE%\.claude\projects"
     dlg.close()
+
+
+def test_claude_source_empty_tree_shows_hint(qapp, tmp_path, monkeypatch):
+    """Bascule sur la source Claude Code sans données : l'arbre affiche un
+    message d'explication, pas 3 sections vides ni un crash."""
+    import config
+    from antigravity_manager import AntigravityManagerWindow
+
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    config.save_config({"claude_root": str(tmp_path / "inexistant")})
+
+    win = AntigravityManagerWindow()
+    win.source_combo.setCurrentIndex(1)  # -> claude_code
+    labels = [win.tree.topLevelItem(i).text(0) for i in range(win.tree.topLevelItemCount())]
+    assert any("introuvable" in lab or "Aucune conversation" in lab for lab in labels)
+    # Rebascule Antigravity sans erreur.
+    win.source_combo.setCurrentIndex(0)
+    assert win._active_source == "antigravity"
+    win.close()
 
 
 def test_changelog_dialog_and_markdown_rendering(qapp):

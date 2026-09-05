@@ -9,9 +9,11 @@ from config import (
     save_config,
     get_projects_root,
     get_antigravity_root,
+    get_claude_root,
     CONFIG_FILE,
     DEFAULT_PROJECTS_ROOT,
     DEFAULT_ANTIGRAVITY_ROOT,
+    DEFAULT_CLAUDE_ROOT,
 )
 
 
@@ -62,6 +64,55 @@ def test_get_roots_with_custom_config(tmp_path, monkeypatch):
 
     assert get_projects_root() == custom_p
     assert get_antigravity_root() == custom_ag
+
+
+def test_claude_root_default_is_literal_userprofile(tmp_path, monkeypatch):
+    """Le défaut de claude_root est stocké LITTÉRALEMENT (%USERPROFILE%…) et
+    résolu seulement à la lecture par get_claude_root()."""
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    assert DEFAULT_CLAUDE_ROOT == r"%USERPROFILE%\.claude\projects"
+    assert load_config()["claude_root"] == DEFAULT_CLAUDE_ROOT
+    # get_claude_root résout la variable d'environnement.
+    resolved = get_claude_root()
+    assert "%USERPROFILE%" not in str(resolved)
+    assert str(resolved).replace("\\", "/").endswith(".claude/projects")
+
+
+def test_antigravity_root_default_is_literal_userprofile(tmp_path, monkeypatch):
+    """Le défaut d'antigravity_root est stocké LITTÉRALEMENT (%USERPROFILE%…),
+    comme claude_root : sinon la variable disparaît à la 1ère sauvegarde des
+    Paramètres et le champ affiche un chemin résolu figé."""
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    assert DEFAULT_ANTIGRAVITY_ROOT.startswith("%USERPROFILE%")
+    assert load_config()["antigravity_root"] == DEFAULT_ANTIGRAVITY_ROOT
+    resolved = get_antigravity_root()
+    assert "%USERPROFILE%" not in str(resolved)
+    assert str(resolved).replace("\\", "/").endswith(".gemini/antigravity-ide") \
+        or str(resolved).replace("\\", "/").endswith(".gemini/antigravity")
+
+
+def test_antigravity_root_var_survives_save(tmp_path, monkeypatch):
+    """Une valeur saisie avec %USERPROFILE% dans les Paramètres est ré-écrite
+    telle quelle par save_config (aucune résolution au passage)."""
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    cfg = load_config()
+    cfg["antigravity_root"] = r"%USERPROFILE%\.gemini\antigravity-ide"
+    save_config(cfg)
+    assert load_config()["antigravity_root"] == r"%USERPROFILE%\.gemini\antigravity-ide"
+
+
+def test_get_claude_root_respects_custom_config(tmp_path, monkeypatch):
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    custom = tmp_path / "ailleurs" / "claude"
+    save_config({"claude_root": str(custom)})
+    assert get_claude_root() == custom
+
+
+def test_get_claude_root_expands_vars_in_custom_config(tmp_path, monkeypatch):
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setenv("MYVAR", str(tmp_path))
+    save_config({"claude_root": r"%MYVAR%\sub"})
+    assert get_claude_root() == tmp_path / "sub"
 
 
 def test_theme_functions(tmp_path, monkeypatch):

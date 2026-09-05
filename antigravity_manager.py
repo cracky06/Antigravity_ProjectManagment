@@ -42,7 +42,6 @@ from config import (
     load_config,
     save_config,
     get_projects_root,
-    get_antigravity_root,
     get_active_theme,
     get_app_version,
     get_last_seen_version,
@@ -52,6 +51,7 @@ from config import (
     save_ui_state,
     DEFAULT_PROJECTS_ROOT,
     DEFAULT_ANTIGRAVITY_ROOT,
+    DEFAULT_CLAUDE_ROOT,
 )
 from data_loader import (
     build_project_map,
@@ -71,6 +71,14 @@ from data_loader import (
     _find_brain_path,
 )
 import search_index
+from claude_code_loader import (
+    build_claude_project_map,
+    load_claude_messages,
+    default_claude_export_filename,
+    export_claude_conversation_to_project,
+    export_claude_conversation_to_path,
+    export_claude_project_conversations,
+)
 
 try:
     import markdown
@@ -545,6 +553,64 @@ def _fallback_search(query: str, mode: str, scope_ids: set[str] | None) -> set[s
     return out
 
 
+class _ClaudeSearchRunnable(QRunnable):
+    """Équivalent de `_SearchRunnable` pour la source Claude Code / Desktop
+    (v2.5) — module d'index séparé (`claude_search_index`), jamais mélangé
+    avec la recherche Antigravity. Classe distincte plutôt que généraliser
+    `_SearchRunnable` : évite tout risque de régression sur la recherche
+    Antigravity existante en la laissant intacte."""
+
+    def __init__(self, generation: int, query: str, mode: str, scope, index_ready: bool):
+        """`scope` : set[str] (ids) si `index_ready`, sinon dict {id: ClaudeConv}
+        (le repli sans index a besoin du .path de chaque session)."""
+        super().__init__()
+        self.signals = _SearchSignals()
+        self._generation = generation
+        self._query = query
+        self._mode = mode
+        self._scope_ids = scope
+        self._index_ready = index_ready
+
+    def run(self) -> None:  # type: ignore[override]
+        import claude_search_index
+
+        try:
+            if self._index_ready:
+                found = claude_search_index.search(
+                    self._query, mode=self._mode, conv_ids=self._scope_ids
+                )
+            else:
+                found = _fallback_claude_search(self._query, self._mode, self._scope_ids)
+        except re.error as exc:
+            self.signals.failed.emit(self._generation, f"Regex invalide : {exc}")
+            return
+        except Exception as exc:  # pragma: no cover - garde-fou
+            self.signals.failed.emit(self._generation, f"Échec de la recherche : {exc}")
+            return
+        finally:
+            claude_search_index.close_thread_connection()
+        self.signals.finished.emit(self._generation, found)
+
+
+def _fallback_claude_search(query: str, mode: str, scope: dict | None) -> set[str]:
+    """Recherche sans index pour la source Claude Code : `scope` est un
+    mapping {conv_id: ClaudeConv} (il faut le `.path` de chaque session, pas
+    juste son id, pour relire le transcript)."""
+    if not scope:
+        return set()
+    rx = re.compile(query, re.IGNORECASE | re.MULTILINE) if mode == "regex" else None
+    needle = query.lower()
+    out: set[str] = set()
+    for cid, conv in scope.items():
+        body = "\n".join(m.get("text", "") for m in load_claude_messages(conv.path) if m.get("text"))
+        if rx is not None:
+            if rx.search(body):
+                out.add(cid)
+        elif needle in body.lower():
+            out.add(cid)
+    return out
+
+
 class _IndexSyncSignals(QObject):
     finished = _Signal(int, int, bool, str)  # (updated, deleted, ok, message)
 
@@ -568,6 +634,47 @@ class _IndexSyncRunnable(QRunnable):
             self.signals.finished.emit(0, 0, False, f"Échec de l'indexation : {exc}")
         finally:
             search_index.close_thread_connection()
+
+
+class _ClaudeIndexSyncRunnable(QRunnable):
+    """Équivalent de `_IndexSyncRunnable` pour la source Claude Code (v2.5)."""
+
+    def __init__(self, convs: list, rebuild: bool = False):
+        super().__init__()
+        self.signals = _IndexSyncSignals()
+        self._convs = convs
+        self._rebuild = rebuild
+
+    def run(self) -> None:  # type: ignore[override]
+        import claude_search_index
+
+        try:
+            fn = claude_search_index.rebuild_index if self._rebuild else claude_search_index.sync_index
+            updated, deleted = fn(self._convs)
+            status = claude_search_index.check_status()
+            self.signals.finished.emit(updated, deleted, status.ok, status.message)
+        except Exception as exc:  # pragma: no cover - garde-fou
+            self.signals.finished.emit(0, 0, False, f"Échec de l'indexation : {exc}")
+        finally:
+            claude_search_index.close_thread_connection()
+
+
+class _ClaudeTouchIndexRunnable(QRunnable):
+    """Indexe UNE conversation Claude Code au fil de l'eau (consultation)."""
+
+    def __init__(self, conv):
+        super().__init__()
+        self._conv = conv
+
+    def run(self) -> None:  # type: ignore[override]
+        import claude_search_index
+
+        try:
+            claude_search_index.touch_conversation(self._conv)
+        except Exception:  # pragma: no cover - ne doit jamais gêner l'affichage
+            pass
+        finally:
+            claude_search_index.close_thread_connection()
 
 
 class _TouchIndexRunnable(QRunnable):
@@ -602,7 +709,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.on_save_callback = on_save_callback
         self.setWindowTitle("Paramètres — Dossiers sources & Thème")
-        self.setFixedSize(560, 372)
+        self.setFixedSize(560, 430)
         self.setModal(True)
 
         is_dark = get_active_theme() == "dark"
@@ -616,10 +723,13 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        # 1. Racine des Projets
+        # 1. Racine des Projets. On affiche la valeur BRUTE de config.json
+        # (qui peut contenir %USERPROFILE%…) et non le chemin résolu, sinon
+        # les variables d'environnement disparaissent à chaque réouverture.
+        _cfg0 = load_config()
         layout.addWidget(QLabel("Répertoire racine des projets (ex: E:\\Dev) :"))
         p_row = QHBoxLayout()
-        self.proj_edit = QLineEdit(str(get_projects_root()))
+        self.proj_edit = QLineEdit(_cfg0.get("projects_root", str(DEFAULT_PROJECTS_ROOT)))
         self.proj_edit.setStyleSheet(input_style)
         p_row.addWidget(self.proj_edit)
         btn_browse_p = QPushButton("Parcourir…")
@@ -627,10 +737,10 @@ class SettingsDialog(QDialog):
         p_row.addWidget(btn_browse_p)
         layout.addLayout(p_row)
 
-        # 2. Racine Antigravity
+        # 2. Racine Antigravity — idem : valeur brute du config, pas résolue.
         layout.addWidget(QLabel("Dossier Antigravity IDE (ex: %USERPROFILE%\\.gemini\\antigravity-ide) :"))
         ag_row = QHBoxLayout()
-        self.ag_edit = QLineEdit(str(get_antigravity_root()))
+        self.ag_edit = QLineEdit(_cfg0.get("antigravity_root", str(DEFAULT_ANTIGRAVITY_ROOT)))
         self.ag_edit.setStyleSheet(input_style)
         ag_row.addWidget(self.ag_edit)
         btn_browse_ag = QPushButton("Parcourir…")
@@ -638,7 +748,20 @@ class SettingsDialog(QDialog):
         ag_row.addWidget(btn_browse_ag)
         layout.addLayout(ag_row)
 
-        # 3. Thème de l'interface
+        # 3. Dossier Claude Code (source « Claude Code / Desktop »). On affiche
+        # la valeur BRUTE de config.json (souvent %USERPROFILE%\.claude\projects)
+        # plutôt que le chemin résolu, cohérent avec le champ Antigravity.
+        layout.addWidget(QLabel("Dossier Claude Code (ex: %USERPROFILE%\\.claude\\projects) :"))
+        cc_row = QHBoxLayout()
+        self.claude_edit = QLineEdit(load_config().get("claude_root", DEFAULT_CLAUDE_ROOT))
+        self.claude_edit.setStyleSheet(input_style)
+        cc_row.addWidget(self.claude_edit)
+        btn_browse_cc = QPushButton("Parcourir…")
+        btn_browse_cc.clicked.connect(self._browse_claude)
+        cc_row.addWidget(btn_browse_cc)
+        layout.addLayout(cc_row)
+
+        # 4. Thème de l'interface
         layout.addWidget(QLabel("Thème de l'application :"))
         self.theme_combo = QComboBox()
         self.theme_combo.addItem("Système (Par défaut)", "system")
@@ -715,9 +838,18 @@ class SettingsDialog(QDialog):
         if d:
             self.ag_edit.setText(d)
 
+    def _browse_claude(self):
+        import os as _os
+
+        start = _os.path.expandvars(self.claude_edit.text()) or str(Path.home())
+        d = QFileDialog.getExistingDirectory(self, "Sélectionner le dossier Claude Code", start)
+        if d:
+            self.claude_edit.setText(d)
+
     def _reset_defaults(self):
         self.proj_edit.setText(str(DEFAULT_PROJECTS_ROOT))
         self.ag_edit.setText(str(DEFAULT_ANTIGRAVITY_ROOT))
+        self.claude_edit.setText(DEFAULT_CLAUDE_ROOT)
         self.theme_combo.setCurrentIndex(0)
 
     def _open_changelog(self):
@@ -738,6 +870,7 @@ class SettingsDialog(QDialog):
         cfg = load_config()
         cfg["projects_root"] = self.proj_edit.text().strip()
         cfg["antigravity_root"] = self.ag_edit.text().strip()
+        cfg["claude_root"] = self.claude_edit.text().strip() or DEFAULT_CLAUDE_ROOT
         cfg["theme"] = self.theme_combo.currentData()
         save_config(cfg)
         self.accept()
@@ -914,6 +1047,20 @@ def _get_splash_pixmap():
     return pm if not pm.isNull() else None
 
 
+def _antigravity_source_icon(dark: bool) -> QIcon:
+    """Logo Antigravity (le même « A »/montagne, tracé sombre ou blanc selon
+    le thème pour rester lisible sur le fond du sélecteur)."""
+    name = "antigravity_white.svg" if dark else "antigravity_black.svg"
+    p = _find_asset(f"assets/{name}", name)
+    return QIcon(str(p)) if p else QIcon()
+
+
+def _claude_source_icon() -> QIcon:
+    """Icône Claude (Claude Desktop `assets/claude.png`)."""
+    p = _find_asset("assets/claude.png", "claude.png")
+    return QIcon(str(p)) if p else QIcon()
+
+
 # =====================================================================
 # Application Principale Antigravity Manager (PyQt6)
 # =====================================================================
@@ -945,6 +1092,12 @@ class AntigravityManagerWindow(QMainWindow):
         self.project_convs: dict[str, list[ConversationInfo]] = {}
         self.all_convs: list[ConversationInfo] = []
         self.selected_conv: ConversationInfo | None = None
+
+        # Source « Claude Code / Desktop » (v2.5, lecture seule) : arbre de
+        # données parallèle, jamais mélangé avec celui d'Antigravity.
+        self._active_source: str = "antigravity"   # "antigravity" | "claude_code"
+        self.claude_project_map: dict = {}
+        self.selected_claude_conv = None
         self.show_raw_markdown: bool = False
         self.changelog_dialog: ChangelogDialog | None = None
 
@@ -978,6 +1131,10 @@ class AntigravityManagerWindow(QMainWindow):
         self._index_ready = False
         self._index_syncing = False
         self._shutting_down = False
+        # Index de recherche de la source Claude Code (v2.5) : état séparé,
+        # jamais mélangé avec _index_ready (Antigravity).
+        self._claude_index_ready = False
+        self._claude_index_syncing = False
         # Références fortes aux runnables en vol (sinon leurs QObject de signaux
         # peuvent être collectés avant l'émission -> RuntimeError).
         self._active_runnables: set = set()
@@ -1111,15 +1268,37 @@ class AntigravityManagerWindow(QMainWindow):
 
         sidebar_layout.addLayout(search_row)
 
-        # Filtre par projet
-        self.project_filter_combo = QComboBox()
-        self.project_filter_combo.setObjectName("projectFilterCombo")
+        # Sélecteur de source de données (v2.5) : Antigravity ou Claude Code /
+        # Claude Desktop (~/.claude/projects/*.jsonl, lecture seule pour l'instant
+        # — cf. claude_code_loader.py). Change ce que _populate_tree affiche.
         is_dark = get_active_theme() == "dark"
-        self.project_filter_combo.setStyleSheet(
+        combo_style = (
             "padding: 5px 8px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 6px; color: #f4f4f5; font-size: 12px;"
             if is_dark
             else "padding: 5px 8px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; color: #0f172a; font-size: 12px;"
         )
+        self.source_combo = QComboBox()
+        self.source_combo.setObjectName("sourceCombo")
+        self.source_combo.setStyleSheet(combo_style)
+        self.source_combo.setIconSize(QSize(16, 16))
+        _ag_icon = _antigravity_source_icon(is_dark)
+        _cc_icon = _claude_source_icon()
+        # Repli sur l'emoji si l'asset manque (build sans les svg/png).
+        if _ag_icon.isNull():
+            self.source_combo.addItem("🌀 Antigravity", "antigravity")
+        else:
+            self.source_combo.addItem(_ag_icon, "Antigravity", "antigravity")
+        if _cc_icon.isNull():
+            self.source_combo.addItem("✳️ Claude Code / Desktop", "claude_code")
+        else:
+            self.source_combo.addItem(_cc_icon, "Claude Code / Desktop", "claude_code")
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        sidebar_layout.addWidget(self.source_combo)
+
+        # Filtre par projet
+        self.project_filter_combo = QComboBox()
+        self.project_filter_combo.setObjectName("projectFilterCombo")
+        self.project_filter_combo.setStyleSheet(combo_style)
         self.project_filter_combo.currentIndexChanged.connect(self._on_filter_changed)
         sidebar_layout.addWidget(self.project_filter_combo)
 
@@ -1316,44 +1495,111 @@ class AntigravityManagerWindow(QMainWindow):
         else:
             self._populate_tree()
 
+    def _on_source_changed(self):
+        """Bascule entre la source Antigravity et Claude Code / Desktop (v2.5).
+
+        Les deux arbres de données restent strictement séparés — on ne
+        mélange jamais les conversations des deux sources. Le même
+        `project_filter_combo` est réutilisé pour les deux (repeuplé à
+        chaque bascule), pour une expérience de filtrage identique.
+        """
+        new_source = self.source_combo.currentData() or "antigravity"
+        if new_source == self._active_source:
+            return
+        self._active_source = new_source
+        self.selected_claude_conv = None
+        self._clear_chat()
+
+        if new_source == "claude_code":
+            self.status_bar.showMessage("Chargement des conversations Claude Code / Desktop…")
+            self.claude_project_map = build_claude_project_map()
+            n_conv = sum(len(v) for v in self.claude_project_map.values())
+            self.status_bar.showMessage(
+                f"✳️ Claude Code / Desktop : {len(self.claude_project_map)} projet(s), {n_conv} conversation(s)",
+                6000,
+            )
+            self._kick_off_claude_index_sync()
+
+        self._refresh_project_filter_combo()
+        self._populate_tree()
+        # Une recherche en cours ne correspond plus à la source affichée.
+        if hasattr(self, "search_input") and self.search_input.text().strip():
+            self.search_input.clear()
+
+    def _refresh_project_filter_combo(self, restore_saved: bool = False):
+        """Repeuple `project_filter_combo` avec les projets de la source
+        active. Antigravity : ALL / NONE (sans projet) / un par projet.
+        Claude Code : ALL / un par projet (pas de notion « sans projet »,
+        chaque session a toujours un `cwd`).
+
+        `restore_saved` : au tout premier chargement Antigravity, reprend le
+        dernier filtre enregistré dans `_ui_state` (aucune sélection courante
+        à ce stade sinon)."""
+        if not hasattr(self, "project_filter_combo"):
+            return
+        self.project_filter_combo.blockSignals(True)
+        cur_data = self.project_filter_combo.currentData()
+        if cur_data is None and restore_saved:
+            cur_data = self._ui_state.get("project_filter")
+        self.project_filter_combo.clear()
+
+        if self._active_source == "claude_code":
+            total_c = sum(len(v) for v in self.claude_project_map.values())
+            self.project_filter_combo.addItem(
+                f"📁 Tous les projets ({len(self.claude_project_map)} projs, {total_c} convs)", "ALL"
+            )
+            for p_name in sorted(self.claude_project_map.keys(), key=str.lower):
+                c_count = len(self.claude_project_map[p_name])
+                self.project_filter_combo.addItem(f"📁 {p_name} ({c_count})", p_name)
+        else:
+            total_c = len(self.all_convs)
+            no_proj = [c for c in self.all_convs if not c.project]
+            self.project_filter_combo.addItem(
+                f"📁 Tous les projets ({len(self.project_convs)} projs, {total_c} convs)", "ALL"
+            )
+            if no_proj:
+                self.project_filter_combo.addItem(f"⚠️ Sans projet ({len(no_proj)})", "NONE")
+            for p_name in sorted(self.project_convs.keys(), key=str.lower):
+                c_count = len(self.project_convs[p_name])
+                self.project_filter_combo.addItem(f"📁 {p_name} ({c_count})", p_name)
+
+        # Restaurer la sélection précédente si elle existe encore dans cette
+        # source (sinon on retombe sur "Tous les projets").
+        idx = 0
+        if cur_data:
+            for i in range(self.project_filter_combo.count()):
+                if self.project_filter_combo.itemData(i) == cur_data:
+                    idx = i
+                    break
+        self.project_filter_combo.setCurrentIndex(idx)
+        self.project_filter_combo.blockSignals(False)
+
     def reload_data(self):
         self._apply_theme()
+
+        # Le bouton 🔄 (et les actions de gestion Antigravity : suppression,
+        # déplacement, import…) appellent reload_data() sans savoir quelle
+        # source est active. Si Claude Code est la source affichée, on
+        # rafraîchit CETTE source plutôt que d'écraser la vue avec des
+        # données Antigravity qui ne correspondraient plus au sélecteur.
+        if self._active_source == "claude_code":
+            self.status_bar.showMessage("Actualisation Claude Code / Desktop…")
+            self.claude_project_map = build_claude_project_map()
+            self._refresh_project_filter_combo()
+            self._populate_tree()
+            n_conv = sum(len(v) for v in self.claude_project_map.values())
+            self.status_bar.showMessage(
+                f"✳️ Claude Code / Desktop : {len(self.claude_project_map)} projet(s), {n_conv} conversation(s)",
+                6000,
+            )
+            return
+
         projects_root, _, _, _, _ = get_paths()
         self.status_bar.showMessage("Chargement des données Antigravity…")
 
         self.project_convs, self.all_convs = build_project_map()
 
-        # Mettre à jour la boîte de filtre par projet
-        if hasattr(self, "project_filter_combo"):
-            self.project_filter_combo.blockSignals(True)
-            cur_data = self.project_filter_combo.currentData()
-            # Au tout premier chargement, aucune sélection courante : on reprend
-            # le dernier filtre projet enregistré.
-            if cur_data is None:
-                cur_data = self._ui_state.get("project_filter")
-            self.project_filter_combo.clear()
-
-            total_c = len(self.all_convs)
-            no_proj = [c for c in self.all_convs if not c.project]
-            
-            self.project_filter_combo.addItem(f"📁 Tous les projets ({len(self.project_convs)} projs, {total_c} convs)", "ALL")
-            if no_proj:
-                self.project_filter_combo.addItem(f"⚠️ Sans projet ({len(no_proj)})", "NONE")
-
-            for p_name in sorted(self.project_convs.keys(), key=str.lower):
-                c_count = len(self.project_convs[p_name])
-                self.project_filter_combo.addItem(f"📁 {p_name} ({c_count})", p_name)
-
-            # Restaurer sélection précédente si disponible
-            idx = 0
-            if cur_data:
-                for i in range(self.project_filter_combo.count()):
-                    if self.project_filter_combo.itemData(i) == cur_data:
-                        idx = i
-                        break
-            self.project_filter_combo.setCurrentIndex(idx)
-            self.project_filter_combo.blockSignals(False)
-
+        self._refresh_project_filter_combo(restore_saved=True)
         self._populate_tree()
 
         if self.selected_conv:
@@ -1428,12 +1674,180 @@ class AntigravityManagerWindow(QMainWindow):
         self.status_bar.showMessage("Reconstruction de l'index de recherche…", 4000)
         self._kick_off_index_sync(rebuild=True)
 
+    # -----------------------------------------------------------------
+    # Index plein-texte — source Claude Code / Desktop (v2.5)
+    # -----------------------------------------------------------------
+    def _kick_off_claude_index_sync(self, rebuild: bool = False):
+        all_convs = [c for convs in self.claude_project_map.values() for c in convs]
+        if self._claude_index_syncing or not all_convs:
+            return
+        import claude_search_index
+
+        status = claude_search_index.check_status()
+        if status.corrupt and not rebuild:
+            self.status_bar.showMessage(
+                f"⚠️ {status.message} — reconstruction automatique de l'index Claude Code…", 6000
+            )
+            rebuild = True
+
+        self._claude_index_syncing = True
+        self._claude_index_ready = status.ok and not status.corrupt
+        runnable = _ClaudeIndexSyncRunnable(all_convs, rebuild=rebuild)
+        self._active_runnables.add(runnable)
+        runnable.signals.finished.connect(self._on_claude_index_sync_finished)
+        runnable.signals.finished.connect(lambda *_: self._active_runnables.discard(runnable))
+        self._thread_pool.start(runnable)
+
+    def _on_claude_index_sync_finished(self, updated: int, deleted: int, ok: bool, message: str):
+        if self._shutting_down:
+            return
+        self._claude_index_syncing = False
+        self._claude_index_ready = ok
+        if ok:
+            if self.btn_mode_words.isChecked() and self.search_input.text().strip():
+                self._do_search()
+        else:
+            self.status_bar.showMessage(
+                f"⚠️ Index Claude Code indisponible : {message} — recherche en mode dégradé.", 8000
+            )
+
     def _populate_tree(self):
         self.tree.clear()
         is_dark = get_active_theme() == "dark"
         header_color = QColor("#a1a1aa" if is_dark else "#64748b")
         active_color = QColor("#f4f4f5" if is_dark else "#0f172a")
         empty_color = QColor("#71717a" if is_dark else "#94a3b8")
+
+        # Source Claude Code / Desktop (v2.5, lecture seule) : même principe
+        # à 3 sections que la vue Antigravity (PROJETS / HORS PROJET /
+        # RÉCENTES) quand le filtre est sur « Tous les projets », ou vue
+        # projet unique quand un projet précis est sélectionné.
+        if self._active_source == "claude_code":
+            def _add_claude_project_item(proj_name: str, convs) -> QTreeWidgetItem:
+                # NB : ne PAS appeler setExpanded ici — Qt l'ignore sur un item
+                # pas encore rattaché à l'arbre. L'appelant le fait APRÈS
+                # addTopLevelItem/addChild.
+                p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
+                p_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_project", proj_name, convs))
+                p_item.setForeground(0, active_color if convs else empty_color)
+                for c_info in convs:
+                    _add_claude_conv_child(p_item, c_info)
+                return p_item
+
+            def _add_claude_conv_child(parent: QTreeWidgetItem, c_info, *, badge: bool = False):
+                label = c_info.title or c_info.conv_id[:12]
+                max_len = 34 if badge else 40
+                if len(label) > max_len:
+                    label = label[:max_len - 2] + "…"
+                badge_txt = f"  •  [{c_info.project}]" if badge else ""
+                origin = f"  •  [{c_info.origin_label}]" if c_info.origin_label and not badge else ""
+                date_str = c_info.last_dt.strftime("%d/%m %H:%M") if c_info.last_dt else ""
+                time_suffix = f"   {date_str}" if date_str else ""
+                c_item = QTreeWidgetItem([f"💬  {label}{badge_txt}{origin}{time_suffix}"])
+                c_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_conv", c_info))
+                parent.addChild(c_item)
+                return c_item
+
+            claude_filter = "ALL"
+            if hasattr(self, "project_filter_combo") and self.project_filter_combo.count() > 0:
+                claude_filter = self.project_filter_combo.currentData() or "ALL"
+
+            if claude_filter != "ALL" and claude_filter in self.claude_project_map:
+                # Vue projet unique — équivalent du CAS 2 Antigravity.
+                convs = self.claude_project_map[claude_filter]
+                header_item = QTreeWidgetItem([f"PROJET : {claude_filter} ({len(convs)} convs)"])
+                header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                header_item.setForeground(0, header_color)
+                f = header_item.font(0)
+                f.setBold(True)
+                header_item.setFont(0, f)
+                self.tree.addTopLevelItem(header_item)
+                header_item.setExpanded(True)
+                p_item = _add_claude_project_item(claude_filter, convs)
+                self.tree.addTopLevelItem(p_item)
+                p_item.setExpanded(True)  # après insertion, sinon Qt ignore
+                return
+
+            # Aucune donnée : message explicite plutôt que 3 sections à (0).
+            if not self.claude_project_map:
+                from claude_code_loader import get_claude_projects_root
+
+                root = get_claude_projects_root()
+                exists = root.is_dir()
+                msg = (
+                    "Aucune conversation Claude Code trouvée dans ce dossier."
+                    if exists
+                    else "Dossier Claude Code introuvable."
+                )
+                it = QTreeWidgetItem([f"  ℹ️  {msg}"])
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                it.setForeground(0, header_color)
+                self.tree.addTopLevelItem(it)
+                hint = QTreeWidgetItem([
+                    "      Installez l'extension VS Code ou l'app Claude Desktop,"
+                    if not exists else
+                    "      Lancez une session Claude Code dans un projet pour la voir ici."
+                ])
+                hint.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                hint.setForeground(0, empty_color)
+                self.tree.addTopLevelItem(hint)
+                if not exists:
+                    hint2 = QTreeWidgetItem([
+                        f"      ou changez le dossier dans Paramètres ⚙️ (actuel : {root})."
+                    ])
+                    hint2.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    hint2.setForeground(0, empty_color)
+                    self.tree.addTopLevelItem(hint2)
+                return
+
+            # Vue « Tous les projets » — 3 sections comme côté Antigravity.
+            def _make_section_header(label: str) -> QTreeWidgetItem:
+                it = QTreeWidgetItem([label])
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                it.setForeground(0, header_color)
+                fnt = it.font(0)
+                fnt.setBold(True)
+                it.setFont(0, fnt)
+                self.tree.addTopLevelItem(it)
+                return it
+
+            all_claude_convs = [c for convs in self.claude_project_map.values() for c in convs]
+
+            # --- Section 1 : PROJETS ---------------------------------
+            proj_header_item = _make_section_header(f"PROJETS ({len(self.claude_project_map)})")
+            for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
+                convs = self.claude_project_map[proj_name]
+                proj_header_item.addChild(_add_claude_project_item(proj_name, convs))
+                # dossiers repliés par défaut en vue globale (état par défaut
+                # d'un QTreeWidgetItem, rien à forcer)
+
+            # --- Section 2 : CONVERSATIONS HORS PROJET ---------------
+            # Cas rare (session « teleported-from » sans cwd local, cf.
+            # claude_code_loader._decode_folder_name) — pas d'équivalent
+            # « conversation_has_dialogue » nécessaire ici : ces sessions ne
+            # sont déjà gardées par le scan que si elles ont un vrai message.
+            no_root_convs = [c for c in all_claude_convs if c.project_root is None]
+            orphan_header_item = _make_section_header(
+                f"CONVERSATIONS HORS PROJET ({len(no_root_convs)})"
+            )
+            for c_info in no_root_convs:
+                _add_claude_conv_child(orphan_header_item, c_info)
+
+            # --- Section 3 : CONVERSATIONS RÉCENTES -------------------
+            # Limitée à 40 -> le compteur reflète ce qui est réellement listé.
+            recent_sorted = sorted(
+                all_claude_convs,
+                key=lambda c: c.last_dt or __import__("datetime").datetime.min,
+                reverse=True,
+            )[:40]
+            recent_header_item = _make_section_header(f"CONVERSATIONS RÉCENTES ({len(recent_sorted)})")
+            for c_info in recent_sorted:
+                _add_claude_conv_child(recent_header_item, c_info, badge=True)
+
+            proj_header_item.setExpanded(True)
+            orphan_header_item.setExpanded(True)
+            recent_header_item.setExpanded(False)
+            return
 
         filter_val = "ALL"
         if hasattr(self, "project_filter_combo") and self.project_filter_combo.count() > 0:
@@ -1523,7 +1937,7 @@ class AntigravityManagerWindow(QMainWindow):
             return c_item
 
         # --- Section 1 : PROJETS -------------------------------------------
-        proj_header_item = _make_section_header("PROJETS")
+        proj_header_item = _make_section_header(f"PROJETS ({len(self.project_convs)})")
         for proj_name in sorted(self.project_convs.keys(), key=str.lower):
             convs = self.project_convs[proj_name]
             count = len(convs)
@@ -1553,8 +1967,11 @@ class AntigravityManagerWindow(QMainWindow):
             _add_conv_child(orphan_header_item, c_info)
 
         # --- Section 3 : CONVERSATIONS RÉCENTES (repliée par défaut) -------
-        recent_header_item = _make_section_header("CONVERSATIONS RÉCENTES")
-        for c_info in self.all_convs[:40]:
+        # Limitée à 40 -> le compteur reflète ce qui est réellement listé,
+        # pas le total de conversations toutes sources confondues.
+        recent_convs = self.all_convs[:40]
+        recent_header_item = _make_section_header(f"CONVERSATIONS RÉCENTES ({len(recent_convs)})")
+        for c_info in recent_convs:
             _add_conv_child(recent_header_item, c_info, badge=True)
 
         proj_header_item.setExpanded(True)
@@ -1572,7 +1989,9 @@ class AntigravityManagerWindow(QMainWindow):
         if dtype == "conv":
             c_info: ConversationInfo = data[1]
             self.display_chat(c_info)
-        elif dtype == "project":
+        elif dtype == "claude_conv":
+            self.display_claude_chat(data[1])
+        elif dtype in ("project", "claude_project"):
             # Si on clique sur le projet, on bascule son expansion
             if item.childCount() > 0:
                 item.setExpanded(not item.isExpanded())
@@ -1591,6 +2010,10 @@ class AntigravityManagerWindow(QMainWindow):
                 # Navigation au clavier : on ne pollue pas l'historique du bouton ←
                 # (seuls un clic explicite, un résultat de recherche ou un lien empilent).
                 self.display_chat(c_info, record_history=False)
+        elif dtype == "claude_conv":
+            c_info = data[1]
+            if not self.selected_claude_conv or self.selected_claude_conv.conv_id != c_info.conv_id:
+                self.display_claude_chat(c_info)
 
     def _toggle_markdown_mode(self):
         """Bascule entre la vue riche HTML et le mode markdown source brut (<>)."""
@@ -1894,6 +2317,130 @@ class AntigravityManagerWindow(QMainWindow):
         full_html = "".join(html_parts)
         self._set_chat_html(full_html)
         # Pré-remplir la find bar si recherche globale active
+        self._prefill_find_from_search()
+
+    def display_claude_chat(self, conv):
+        """Affiche une conversation Claude Code / Desktop (v2.5, lecture seule).
+
+        Rendu volontairement plus simple que `display_chat` (pas d'historique
+        de navigation, pas de mode source brut) — cf. portée v1 documentée
+        dans claude_code_loader.py. L'indexation FTS (v2.5) est au fil de
+        l'eau comme côté Antigravity : `_ClaudeTouchIndexRunnable`.
+        """
+        self.selected_claude_conv = conv
+        self.chat_title.setText(conv.title or "Conversation sans titre")
+        date_str = conv.last_dt.strftime("%d/%m/%Y à %H:%M") if conv.last_dt else "Date inconnue"
+        origin = f" • {conv.origin_label}" if conv.origin_label else ""
+        self.chat_meta.setText(f"📁 {conv.project}   •   {date_str}{origin}   •   ID: {conv.conv_id}")
+        self.btn_open_folder.setVisible(False)
+        self.btn_toggle_raw.setVisible(False)
+        self.btn_find_toggle.setVisible(True)
+
+        if not self._shutting_down and self._claude_index_ready and not self._claude_index_syncing:
+            r = _ClaudeTouchIndexRunnable(conv)
+            self._thread_pool.start(r)
+
+        messages = load_claude_messages(conv.path)
+        is_dark = get_active_theme() == "dark"
+
+        if not messages:
+            info_col = "#a1a1aa" if is_dark else "#475569"
+            sub_col = "#71717a" if is_dark else "#64748b"
+            self._set_chat_html(f"""
+            <div style="text-align: center; margin-top: 60px; font-family: sans-serif;">
+                <p style="font-size: 24px;">ℹ️</p>
+                <p style="font-size: 14px; font-weight: bold; color: {info_col};">Aucun message textuel dans cette session.</p>
+                <p style="font-size: 12px; color: {sub_col};">Session probablement technique (queue/bridge) sans dialogue.</p>
+            </div>
+            """)
+            return
+
+        if is_dark:
+            body_bg, body_col = "#18181b", "#e4e4e7"
+            user_bg, user_border, user_title_col, user_text_col = "#27272a", "#3f3f46", "#60a5fa", "#ffffff"
+            model_bg, model_border, model_title_col, model_text_col = "#18181b", "#8b5cf6", "#a78bfa", "#e4e4e7"
+            pre_bg, pre_border, pre_col = "#121215", "#27272a", "#38bdf8"
+            code_bg, code_col = "#27272a", "#38bdf8"
+            hr_col, time_col = "#27272a", "#71717a"
+        else:
+            body_bg, body_col = "#ffffff", "#0f172a"
+            user_bg, user_border, user_title_col, user_text_col = "#f0f9ff", "#bae6fd", "#0284c7", "#0f172a"
+            model_bg, model_border, model_title_col, model_text_col = "#ffffff", "#7c3aed", "#6d28d9", "#1e293b"
+            pre_bg, pre_border, pre_col = "#f8fafc", "#e2e8f0", "#0369a1"
+            code_bg, code_col = "#f1f5f9", "#0369a1"
+            hr_col, time_col = "#e2e8f0", "#64748b"
+
+        html_parts = [f"""<!DOCTYPE html><html><head><style>
+            body {{ background-color: {body_bg}; color: {body_col};
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    font-size: 13px; line-height: 1.45; margin: 0; padding: 10px; }}
+            .msg-container {{ margin-bottom: 14px; }}
+            .user-box {{ background-color: {user_bg}; border: 1px solid {user_border};
+                         border-radius: 8px; padding: 8px 14px; margin-bottom: 8px; }}
+            .user-header {{ font-weight: bold; color: {user_title_col}; font-size: 12px; margin: 0 0 1px 0; }}
+            .model-box {{ background-color: {model_bg}; border-left: 3px solid {model_border};
+                          padding: 2px 14px; margin-bottom: 10px; }}
+            .model-header {{ font-weight: bold; color: {model_title_col}; font-size: 12px; margin: 0 0 1px 0; }}
+            .msg-body {{ line-height: 1.4; }}
+            .time-tag {{ color: {time_col}; font-weight: normal; font-size: 11px; float: right; }}
+            h1, h2, h3, h4 {{ margin-top: 10px; margin-bottom: 4px; color: {model_title_col}; }}
+            h1 {{ font-size: 16px; border-bottom: 1px solid {hr_col}; padding-bottom: 3px; }}
+            h2 {{ font-size: 15px; border-bottom: 1px solid {hr_col}; padding-bottom: 2px; }}
+            h3 {{ font-size: 14px; }} h4 {{ font-size: 13px; }}
+            p {{ margin: 2px 0; }} ul, ol {{ margin: 2px 0; padding-left: 20px; }} li {{ margin-bottom: 1px; }}
+            strong {{ font-weight: bold; }}
+            blockquote {{ border-left: 3px solid {model_border}; margin: 6px 0; padding: 4px 10px; color: {time_col}; }}
+            table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
+            th, td {{ border: 1px solid {hr_col}; padding: 5px 8px; text-align: left; }}
+            th {{ background-color: {pre_bg}; font-weight: bold; }}
+            pre {{ background-color: {pre_bg}; border: 1px solid {pre_border}; border-radius: 6px;
+                   padding: 10px; font-family: 'Consolas', 'Fira Code', monospace; font-size: 12px;
+                   color: {pre_col}; white-space: pre-wrap; word-wrap: break-word; }}
+            code {{ background-color: {code_bg}; padding: 2px 4px; border-radius: 4px;
+                    font-family: 'Consolas', monospace; font-size: 12px; color: {code_col};
+                    white-space: pre-wrap; word-wrap: break-word; }}
+            a {{ color: {model_title_col}; word-wrap: break-word; }}
+        </style></head><body>"""]
+
+        for msg in messages:
+            role = msg.get("role")
+            raw_text = msg.get("text", "").strip()
+            ts = msg.get("timestamp", "")
+            time_html = f"<span class='time-tag'>{ts}</span>" if ts else ""
+
+            def _escape_pre(text: str) -> str:
+                escaped = (
+                    text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                )
+                return escaped.replace("\n", "<br>")
+
+            if markdown:
+                try:
+                    formatted = markdown.markdown(raw_text, extensions=["fenced_code", "tables", "nl2br"])
+                except Exception:
+                    formatted = _escape_pre(raw_text)
+            else:
+                formatted = _escape_pre(raw_text)
+
+            _stripped = formatted.strip()
+            if _stripped.startswith("<p>") and _stripped.endswith("</p>") and _stripped.count("<p>") == 1:
+                formatted = _stripped[3:-4]
+
+            if role == "user":
+                html_parts.append(f"""
+                <div class="msg-container"><div class="user-box">
+                    <div class="user-header">👤 Utilisateur {time_html}</div>
+                    <div class="msg-body" style="color: {user_text_col};">{formatted}</div>
+                </div></div>""")
+            elif role == "assistant":
+                html_parts.append(f"""
+                <div class="msg-container"><div class="model-box">
+                    <div class="model-header">✳️ Claude {time_html}</div>
+                    <div class="msg-body" style="color: {model_text_col};">{formatted}</div>
+                </div></div>""")
+
+        html_parts.append("</body></html>")
+        self._set_chat_html("".join(html_parts))
         self._prefill_find_from_search()
 
     def _set_chat_html(self, html: str):
@@ -2258,12 +2805,14 @@ class AntigravityManagerWindow(QMainWindow):
             return
 
         mode = self._current_search_mode()
+        is_claude = self._active_source == "claude_code"
+        index_ready = self._claude_index_ready if is_claude else self._index_ready
         # Repli si « mots » demandé sans index : on rétrograde en « contient ».
         effective_mode = mode
-        if mode == "words" and not self._index_ready:
+        if mode == "words" and not index_ready:
             effective_mode = "substring"
 
-        scope = self._get_search_scope()
+        scope = self._get_claude_search_scope() if is_claude else self._get_search_scope()
         self._search_scope_by_id = {c.conv_id: c for c in scope}
         scope_ids = set(self._search_scope_by_id.keys())
 
@@ -2275,7 +2824,16 @@ class AntigravityManagerWindow(QMainWindow):
             f"dans {len(scope_ids)} conversation(s)…"
         )
 
-        runnable = _SearchRunnable(gen, query, effective_mode, scope_ids, self._index_ready)
+        if is_claude:
+            # Le repli sans index a besoin du .path de chaque session, pas
+            # seulement de son id -> on passe le mapping complet.
+            runnable = _ClaudeSearchRunnable(
+                gen, query, effective_mode,
+                scope_ids if index_ready else dict(self._search_scope_by_id),
+                index_ready,
+            )
+        else:
+            runnable = _SearchRunnable(gen, query, effective_mode, scope_ids, index_ready)
         self._active_runnables.add(runnable)
         runnable.signals.finished.connect(self._on_search_finished)
         runnable.signals.failed.connect(self._on_search_failed)
@@ -2332,6 +2890,16 @@ class AntigravityManagerWindow(QMainWindow):
             return self.project_convs[filter_val]
         return self.all_convs
 
+    def _get_claude_search_scope(self) -> list:
+        """Équivalent de `_get_search_scope` pour la source Claude Code."""
+        all_convs = [c for convs in self.claude_project_map.values() for c in convs]
+        if not hasattr(self, "project_filter_combo"):
+            return all_convs
+        filter_val = self.project_filter_combo.currentData() or "ALL"
+        if filter_val == "ALL":
+            return all_convs
+        return self.claude_project_map.get(filter_val, all_convs)
+
     def _populate_tree_search_results(
         self, results: dict[str, list[ConversationInfo]], query: str
     ):
@@ -2358,6 +2926,8 @@ class AntigravityManagerWindow(QMainWindow):
         header_item.setFont(0, f)
         self.tree.addTopLevelItem(header_item)
 
+        is_claude = self._active_source == "claude_code"
+        conv_dtype = "claude_conv" if is_claude else "conv"
         for proj_name, convs in sorted(results.items(), key=lambda x: x[0].lower()):
             p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
             p_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -2367,9 +2937,16 @@ class AntigravityManagerWindow(QMainWindow):
                 display_title = c_info.title if c_info.title else c_info.conv_id[:12]
                 if len(display_title) > 38:
                     display_title = display_title[:36] + "…"
-                time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
+                # ClaudeConv n'a pas de temps relatif ; on affiche sa date
+                # comme dans l'arbre normal de cette source.
+                if is_claude:
+                    time_suffix = (
+                        f"   {c_info.last_dt.strftime('%d/%m %H:%M')}" if c_info.last_dt else ""
+                    )
+                else:
+                    time_suffix = f"   {c_info.rel_time}" if c_info.rel_time else ""
                 c_item = QTreeWidgetItem([f"💬  {display_title}{time_suffix}"])
-                c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+                c_item.setData(0, Qt.ItemDataRole.UserRole, (conv_dtype, c_info))
                 p_item.addChild(c_item)
 
             p_item.setExpanded(True)
@@ -2397,8 +2974,12 @@ class AntigravityManagerWindow(QMainWindow):
         self._show_find_bar(prefill=q)
 
     def _show_find_bar(self, prefill: str = ""):
-        """Affiche la barre de recherche locale. Pré-remplit optionnellement le champ."""
-        if not self.selected_conv:
+        """Affiche la barre de recherche locale. Pré-remplit optionnellement le champ.
+
+        Fonctionne pour les deux sources : `_recompute_find_matches` opère
+        directement sur `self.chat_browser.document()`, sans distinction —
+        seul un contenu affiché (Antigravity OU Claude Code) est requis."""
+        if not self.selected_conv and not self.selected_claude_conv:
             return
         self.find_bar.setVisible(True)
         if prefill and self.find_input.text() != prefill:
@@ -2623,6 +3204,13 @@ class AntigravityManagerWindow(QMainWindow):
             return
 
         dtype = data[0]
+        if dtype in ("claude_project", "claude_conv"):
+            # Source Claude Code / Desktop (v2.5) : export Markdown seulement.
+            # Suppression/déplacement délibérément absents — ce sont des
+            # fichiers gérés par Claude Code, pas par cette app (garde-fou
+            # demandé explicitement).
+            self._build_claude_context_menu(dtype, data, pos)
+            return
         menu = QMenu(self)
 
         if dtype == "project":
@@ -2743,6 +3331,154 @@ class AntigravityManagerWindow(QMainWindow):
             self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
         else:
             QMessageBox.critical(self, "Échec de l'export", result)
+
+    # -----------------------------------------------------------------
+    # Menu contextuel & export Markdown — source Claude Code / Desktop (v2.5)
+    # Volontairement limité à l'export : pas de suppression/déplacement, ce
+    # sont des fichiers gérés par Claude Code, pas par cette app.
+    # -----------------------------------------------------------------
+    def _build_claude_context_menu(self, dtype: str, data: tuple, pos):
+        menu = QMenu(self)
+        if dtype == "claude_conv":
+            conv = data[1]
+            act_open = menu.addAction("📂 Ouvrir le dossier du projet dans l'Explorateur")
+            act_open.setEnabled(bool(conv.project_root and conv.project_root.is_dir()))
+            act_open.triggered.connect(lambda: self._open_claude_project_folder(conv))
+
+            act_copy_id = menu.addAction("📋 Copier l'ID de session")
+            act_copy_id.triggered.connect(lambda: QApplication.clipboard().setText(conv.conv_id))
+
+            menu.addSeparator()
+            act_exp_proj = menu.addAction("💾 Exporter en Markdown dans le projet")
+            act_exp_proj.setEnabled(bool(conv.project_root))
+            act_exp_proj.triggered.connect(lambda checked=False, c=conv: self._export_claude_conv_to_project(c))
+            act_exp_as = menu.addAction("💾 Exporter en Markdown…")
+            act_exp_as.triggered.connect(lambda checked=False, c=conv: self._export_claude_conv_as(c))
+        elif dtype == "claude_project":
+            _, proj_name, convs = data
+            act_open = menu.addAction(f"📂 Ouvrir '{proj_name}' dans l'Explorateur")
+            root = convs[0].project_root if convs else None
+            act_open.setEnabled(bool(root and root.is_dir()))
+            act_open.triggered.connect(lambda: self._open_claude_project_folder(convs[0]) if convs else None)
+
+            menu.addSeparator()
+            n = len(convs)
+            act_exp_all = menu.addAction(f"💾 Exporter les {n} conversation(s) en Markdown")
+            act_exp_all.setEnabled(n > 0)
+            act_exp_all.triggered.connect(
+                lambda checked=False, p=proj_name, cs=list(convs): self._export_claude_project_all(p, cs)
+            )
+            act_pdf = menu.addAction("📄 Exporter le projet en PDF…")
+            act_pdf.setEnabled(n > 0)
+            act_pdf.triggered.connect(
+                lambda checked=False, p=proj_name, cs=list(convs): self._export_claude_project_pdf(p, cs)
+            )
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _open_claude_project_folder(self, conv):
+        if conv.project_root and conv.project_root.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(conv.project_root)))
+        else:
+            QMessageBox.warning(self, "Erreur", "Dossier de projet introuvable.")
+
+    def _export_claude_conv_to_project(self, conv):
+        """Écrit l'export dans `<project_root>/_conversations/`."""
+        ok, result = export_claude_conversation_to_project(conv)
+        if ok:
+            self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(result).parent)))
+        else:
+            QMessageBox.critical(self, "Échec de l'export", result)
+
+    def _export_claude_conv_as(self, conv):
+        """Demande l'emplacement puis écrit l'export Markdown."""
+        suggested = default_claude_export_filename(conv)
+        start_dir = str(conv.project_root) if conv.project_root else str(Path.home())
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exporter la conversation en Markdown",
+            str(Path(start_dir) / suggested),
+            "Fichiers Markdown (*.md);;Tous les fichiers (*)",
+        )
+        if not path:
+            return
+        ok, result = export_claude_conversation_to_path(conv, path)
+        if ok:
+            self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
+        else:
+            QMessageBox.critical(self, "Échec de l'export", result)
+
+    def _export_claude_project_all(self, project_name: str, convs: list):
+        """Exporte en masse toutes les conversations Claude Code d'un projet
+        en Markdown dans `<project_root>/_conversations/`."""
+        if not convs:
+            return
+        root = convs[0].project_root
+        if not root:
+            QMessageBox.information(
+                self, "Racine inconnue",
+                "Ce projet n'a pas de dossier local identifiable "
+                "(session démarrée ailleurs) — export en masse impossible.\n"
+                "Utilisez « Exporter en Markdown… » sur chaque conversation.",
+            )
+            return
+        dest = root / "_conversations"
+        ret = QMessageBox.question(
+            self,
+            "Exporter le projet",
+            f"Exporter les {len(convs)} conversation(s) de « {project_name} » "
+            f"en Markdown dans :\n{dest}\n\n"
+            f"Les fichiers existants seront écrasés. Continuer ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        self.status_bar.showMessage(f"💾 Export de « {project_name} »…")
+        QApplication.processEvents()
+        try:
+            ok, fail, dest_dir = export_claude_project_conversations(convs)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Échec de l'export", str(exc))
+            return
+        msg = f"💾 {ok} conversation(s) exportée(s) dans {dest_dir}"
+        if fail:
+            msg += f" — {fail} échec(s)"
+        self.status_bar.showMessage(msg, 8000)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_dir)))
+
+    def _export_claude_project_pdf(self, project_name: str, convs: list):
+        """Assemble toutes les conversations Claude Code du projet dans un
+        seul PDF (même moteur Edge/Chromium headless que côté Antigravity)."""
+        if not convs:
+            return
+        root = convs[0].project_root
+        default_name = f"{project_name}_{__import__('datetime').datetime.now():%Y%m%d}.pdf"
+        suggested = str((root / default_name) if root else Path.home() / default_name)
+        pdf_path, _ = QFileDialog.getSaveFileName(
+            self, "Exporter le projet en PDF", suggested, "Document PDF (*.pdf)"
+        )
+        if not pdf_path:
+            return
+
+        from pdf_export_html import export_claude_project_to_pdf
+
+        self.status_bar.showMessage(
+            f"📄 Génération du PDF de « {project_name} » ({len(convs)} conv.)…"
+        )
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            ok, result = export_claude_project_to_pdf(project_name, convs, pdf_path)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if ok:
+            self.status_bar.showMessage(f"📄 PDF créé : {result}", 8000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(result))
+        else:
+            QMessageBox.critical(self, "Échec de l'export PDF", result)
 
     # -----------------------------------------------------------------
     # Export / archivage au niveau d'un PROJET

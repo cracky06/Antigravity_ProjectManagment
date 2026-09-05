@@ -15,15 +15,23 @@ def _detect_default_projects_root() -> str:
 
 
 def _detect_default_antigravity_root() -> str:
-    # Priorité à antigravity-ide (Antigravity 2.0 / version actuelle)
-    ide_path = Path(os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity-ide"))
-    if ide_path.is_dir():
-        return str(ide_path)
-    return os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity")
+    # Priorité à antigravity-ide (Antigravity 2.0 / version actuelle).
+    # On renvoie la forme LITTÉRALE (%USERPROFILE%…), comme DEFAULT_CLAUDE_ROOT :
+    # c'est ce qui s'affiche/s'enregistre dans les Paramètres, et
+    # `get_antigravity_root()` résout la variable à la lecture. Sinon la
+    # variable disparaît dès la première sauvegarde de config.json.
+    if Path(os.path.expandvars(r"%USERPROFILE%\.gemini\antigravity-ide")).is_dir():
+        return r"%USERPROFILE%\.gemini\antigravity-ide"
+    return r"%USERPROFILE%\.gemini\antigravity"
 
 
 DEFAULT_PROJECTS_ROOT = _detect_default_projects_root()
 DEFAULT_ANTIGRAVITY_ROOT = _detect_default_antigravity_root()
+# Dossier des transcripts Claude Code (partagé par l'extension VS Code et
+# l'onglet « Code » de Claude Desktop). Gardé sous forme littérale
+# (`%USERPROFILE%`) : c'est ce qui s'affiche dans les Paramètres, et
+# `get_claude_root()` résout la variable à la lecture.
+DEFAULT_CLAUDE_ROOT = r"%USERPROFILE%\.claude\projects"
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -38,6 +46,7 @@ def load_config() -> dict:
     config = {
         "projects_root": DEFAULT_PROJECTS_ROOT,
         "antigravity_root": DEFAULT_ANTIGRAVITY_ROOT,
+        "claude_root": DEFAULT_CLAUDE_ROOT,
         "theme": "system",
     }
     if CONFIG_FILE.is_file():
@@ -83,12 +92,26 @@ def save_ui_state(state: dict) -> None:
 
 def get_projects_root() -> Path:
     cfg = load_config()
-    return Path(cfg.get("projects_root", DEFAULT_PROJECTS_ROOT))
+    return Path(os.path.expandvars(cfg.get("projects_root", DEFAULT_PROJECTS_ROOT)))
 
 
 def get_antigravity_root() -> Path:
+    # `os.path.expandvars` : sinon une valeur saisie avec `%USERPROFILE%\...`
+    # dans les Paramètres reste littérale et le dossier est introuvable.
     cfg = load_config()
-    return Path(cfg.get("antigravity_root", DEFAULT_ANTIGRAVITY_ROOT))
+    return Path(os.path.expandvars(cfg.get("antigravity_root", DEFAULT_ANTIGRAVITY_ROOT)))
+
+
+def get_claude_root() -> Path:
+    """Dossier des transcripts Claude Code, avec `%VAR%` résolues.
+
+    Défaut : `%USERPROFILE%\\.claude\\projects`. La valeur peut être stockée
+    littéralement (`%USERPROFILE%\\...`) ou en chemin absolu — les deux
+    fonctionnent grâce à `expandvars`.
+    """
+    cfg = load_config()
+    raw = cfg.get("claude_root", DEFAULT_CLAUDE_ROOT)
+    return Path(os.path.expandvars(raw))
 
 
 def detect_system_theme() -> str:
@@ -160,6 +183,23 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.5": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Nouvelle source de données « Claude Code / Desktop » (sélecteur en haut de la barre latérale) : parcourt les conversations stockées localement par Claude Code (VS Code) et l'application Claude Desktop (~/.claude/projects/)",
+                "Même expérience que la vue Antigravity : arbre en 3 sections (PROJETS / CONVERSATIONS HORS PROJET / CONVERSATIONS RÉCENTES), filtre par projet, badge d'origine (VS Code / Desktop) et date, dialogue avec le même rendu visuel riche",
+                "Recherche globale plein texte dans les conversations Claude Code (3 modes : contient / mots / regex), index dédié",
+                "Recherche locale dans la conversation ouverte (Ctrl+F) : surlignage, navigation entre occurrences",
+                "Export d'une conversation ou de tout un projet en Markdown, et export d'un projet entier en PDF — écrits dans le dossier _conversations/ du vrai dossier de code du projet",
+                "Suppression et déplacement volontairement absents pour cette source (ce sont des fichiers gérés par Claude Code, pas par l'application)",
+                "Nouveau champ « Dossier Claude Code » dans les Paramètres (défaut : %USERPROFILE%\\.claude\\projects) — utile en cas d'installation non standard",
+                "Si le dossier Claude Code est absent ou vide, la barre latérale affiche un message d'explication au lieu de sections vides",
+            ],
+            "🐛 Corrections (fix)": [
+                "Les compteurs de conversations manquaient sur les titres de section « PROJETS » et « CONVERSATIONS RÉCENTES » (sur les deux sources) — ajoutés",
+                "Une session Claude Code démarrée sur une autre machine ou interface (sans dossier local associé) mais contenant un vrai échange n'était plus visible — elle apparaît maintenant sous « CONVERSATIONS HORS PROJET »",
+                "En filtrant sur un projet Claude Code précis, son dossier restait replié — corrigé",
+            ],
+        },
         "v2.4": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Clic droit sur un projet → « Exporter les N conversation(s) en Markdown » : exporte tout le projet dans son dossier _conversations/",
