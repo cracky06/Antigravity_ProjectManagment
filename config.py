@@ -189,6 +189,7 @@ def get_changelog_data() -> dict[str, dict[str, list[str]]]:
             ],
             "🐛 Corrections (fix)": [
                 "Les conversations récentes de l'Antigravity IDE (stockées en base SQLite dans conversations/*.db, sans dossier brain/) s'affichaient vides : titre illisible, aucune date, aucun message. Elles sont désormais lues intégralement — titre, date, projet et dialogue complet",
+                "Les vieilles conversations Antigravity au format hérité (fichier .pb opaque, avril/mai 2026) affichaient « Aucun message textuel ». Si Antigravity est ouvert, leur dialogue complet est maintenant reconstruit à la volée via son moteur local ; sinon un aperçu partiel est reconstitué depuis les résumés de session. Un bandeau discret signale la reconstruction",
             ],
         },
         "v2.5": {
