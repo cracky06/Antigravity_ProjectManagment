@@ -396,6 +396,22 @@ def _find_brain_path(conv_id: str) -> Path | None:
     return None
 
 
+def _find_ide_sqlite_db(conv_id: str):
+    """Localise `conversations/<conv_id>.db` (Antigravity IDE) si présent.
+
+    Utilisé en repli quand aucun `transcript.jsonl` n'existe : les sessions
+    IDE légères n'ont pas de dossier `brain/` mais gardent tout dans SQLite.
+    Renvoie un `Path` ou `None`.
+    """
+    try:
+        from antigravity_ide_sqlite import find_ide_db
+
+        return find_ide_db(conv_id)
+    except Exception as exc:  # module absent (tests isolés) ou erreur FS
+        logger.debug("_find_ide_sqlite_db(%s) : %s", conv_id, exc)
+        return None
+
+
 def _find_transcript_file(conv_id: str) -> Path | None:
     """Trouve le fichier transcript pour une conversation (priorité à transcript.jsonl compact)."""
     _, antigravity_root, brain_dir, _, _ = get_paths()
@@ -435,6 +451,15 @@ def conversation_has_dialogue(conv_id: str) -> bool:
     """
     transcript = _find_transcript_file(conv_id)
     if not transcript or not transcript.is_file():
+        # Repli : conversation IDE stockée en SQLite (pas de dossier brain/).
+        db = _find_ide_sqlite_db(conv_id)
+        if db is not None:
+            try:
+                from antigravity_ide_sqlite import ide_sqlite_has_dialogue
+
+                return ide_sqlite_has_dialogue(db)
+            except Exception as exc:
+                logger.debug("conversation_has_dialogue(%s) SQLite : %s", conv_id, exc)
         return False
     try:
         mtime = transcript.stat().st_mtime
@@ -569,6 +594,31 @@ def load_chat_messages(conv_id: str) -> list[dict]:
         except Exception as exc:
             logger.warning("Lecture du transcript %s échouée : %s", transcript, exc)
 
+    # Repli SQLite : conversation IDE légère sans dossier brain/ ni transcript.
+    if not messages and not (transcript and transcript.is_file()):
+        db = _find_ide_sqlite_db(conv_id)
+        if db is not None:
+            try:
+                from antigravity_ide_sqlite import load_ide_sqlite_conversation
+
+                data = load_ide_sqlite_conversation(db)
+                for m in data.get("messages", []):
+                    messages.append(
+                        {
+                            "role": m["role"],
+                            "text": m["text"],
+                            "timestamp": m.get("timestamp", ""),
+                            "epoch": m.get("epoch", 0.0),
+                        }
+                    )
+                if messages:
+                    try:
+                        _CHAT_CACHE[conv_id] = (db.stat().st_mtime, messages)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.warning("Lecture SQLite %s échouée : %s", db, exc)
+
     # Si aucun message de log mais des artéfacts sont présents sur disque
     if not messages:
         brain_path = _find_brain_path(conv_id)
@@ -642,6 +692,18 @@ def get_transcript_info(conv_id: str):
     """Retourne (fallback_title, last_datetime)."""
     transcript = _find_transcript_file(conv_id)
     if not transcript or not transcript.is_file():
+        # Repli SQLite : session IDE légère sans dossier brain/.
+        db = _find_ide_sqlite_db(conv_id)
+        if db is not None:
+            try:
+                from antigravity_ide_sqlite import load_ide_sqlite_conversation
+
+                data = load_ide_sqlite_conversation(db)
+                title = data.get("title") or conv_id[:12]
+                return title, data.get("last_dt")
+            except Exception as exc:
+                logger.debug("get_transcript_info(%s) SQLite : %s", conv_id, exc)
+
         brain_path = _find_brain_path(conv_id)
         last_dt = None
         if brain_path and brain_path.is_dir():
@@ -722,6 +784,15 @@ def _extract_workspace_from_transcript(conv_id: str) -> str:
     """Extrait le chemin du workspace depuis le journal de session transcript si absent du proto."""
     transcript = _find_transcript_file(conv_id)
     if not transcript or not transcript.is_file():
+        # Repli SQLite : workspace stocké dans la base IDE.
+        db = _find_ide_sqlite_db(conv_id)
+        if db is not None:
+            try:
+                from antigravity_ide_sqlite import extract_workspace
+
+                return extract_workspace(db)
+            except Exception as exc:
+                logger.debug("_extract_workspace_from_transcript(%s) SQLite : %s", conv_id, exc)
         return ""
     try:
         with transcript.open(encoding="utf-8", errors="ignore") as fh:
