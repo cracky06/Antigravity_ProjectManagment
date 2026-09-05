@@ -77,6 +77,7 @@ from claude_code_loader import (
     default_claude_export_filename,
     export_claude_conversation_to_project,
     export_claude_conversation_to_path,
+    export_claude_project_conversations,
 )
 
 try:
@@ -3275,6 +3276,11 @@ class AntigravityManagerWindow(QMainWindow):
 
             menu.addSeparator()
             n = len(convs)
+            act_exp_all = menu.addAction(f"💾 Exporter les {n} conversation(s) en Markdown")
+            act_exp_all.setEnabled(n > 0)
+            act_exp_all.triggered.connect(
+                lambda checked=False, p=proj_name, cs=list(convs): self._export_claude_project_all(p, cs)
+            )
             act_pdf = menu.addAction("📄 Exporter le projet en PDF…")
             act_pdf.setEnabled(n > 0)
             act_pdf.triggered.connect(
@@ -3314,6 +3320,46 @@ class AntigravityManagerWindow(QMainWindow):
             self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
         else:
             QMessageBox.critical(self, "Échec de l'export", result)
+
+    def _export_claude_project_all(self, project_name: str, convs: list):
+        """Exporte en masse toutes les conversations Claude Code d'un projet
+        en Markdown dans `<project_root>/_conversations/`."""
+        if not convs:
+            return
+        root = convs[0].project_root
+        if not root:
+            QMessageBox.information(
+                self, "Racine inconnue",
+                "Ce projet n'a pas de dossier local identifiable "
+                "(session démarrée ailleurs) — export en masse impossible.\n"
+                "Utilisez « Exporter en Markdown… » sur chaque conversation.",
+            )
+            return
+        dest = root / "_conversations"
+        ret = QMessageBox.question(
+            self,
+            "Exporter le projet",
+            f"Exporter les {len(convs)} conversation(s) de « {project_name} » "
+            f"en Markdown dans :\n{dest}\n\n"
+            f"Les fichiers existants seront écrasés. Continuer ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        self.status_bar.showMessage(f"💾 Export de « {project_name} »…")
+        QApplication.processEvents()
+        try:
+            ok, fail, dest_dir = export_claude_project_conversations(convs)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Échec de l'export", str(exc))
+            return
+        msg = f"💾 {ok} conversation(s) exportée(s) dans {dest_dir}"
+        if fail:
+            msg += f" — {fail} échec(s)"
+        self.status_bar.showMessage(msg, 8000)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_dir)))
 
     def _export_claude_project_pdf(self, project_name: str, convs: list):
         """Assemble toutes les conversations Claude Code du projet dans un

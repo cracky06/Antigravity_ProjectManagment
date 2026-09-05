@@ -400,3 +400,81 @@ def test_export_claude_conversation_to_path(tmp_path):
     assert custom_target.exists()
     assert "Test Export Path" in custom_target.read_text(encoding="utf-8")
 
+
+def test_export_claude_project_conversations_dest_dir(tmp_path):
+    """Cas nominal : plusieurs ClaudeConv -> N fichiers .md créés dans dest_dir."""
+    j1 = tmp_path / "c1.jsonl"
+    j2 = tmp_path / "c2.jsonl"
+    _write_jsonl(j1, [_user_msg("Msg 1", "2026-03-14T10:00:00.000Z", str(tmp_path))])
+    _write_jsonl(j2, [_user_msg("Msg 2", "2026-03-14T10:05:00.000Z", str(tmp_path))])
+
+    c1 = ccl.ClaudeConv(conv_id="conv-1111", project="Proj", path=j1, title="Conv 1")
+    c2 = ccl.ClaudeConv(conv_id="conv-2222", project="Proj", path=j2, title="Conv 2")
+
+    dest = tmp_path / "export_dest"
+    ok, fail, out_dir = ccl.export_claude_project_conversations([c1, c2], dest_dir=dest)
+    assert ok == 2
+    assert fail == 0
+    assert out_dir == dest
+    md_files = list(dest.glob("*.md"))
+    assert len(md_files) == 2
+
+
+def test_export_claude_project_conversations_default_dest(tmp_path):
+    """dest_dir=None + project_root défini sur le 1er conv -> écrit dans <project_root>/_conversations/."""
+    proj_root = tmp_path / "RealProject"
+    proj_root.mkdir()
+    j1 = tmp_path / "c3.jsonl"
+    _write_jsonl(j1, [_user_msg("Msg 3", "2026-03-14T10:00:00.000Z", str(proj_root))])
+
+    c = ccl.ClaudeConv(
+        conv_id="conv-3333",
+        project="RealProject",
+        path=j1,
+        title="Conv 3",
+        project_root=proj_root,
+    )
+    ok, fail, out_dir = ccl.export_claude_project_conversations([c], dest_dir=None)
+    assert ok == 1
+    assert fail == 0
+    expected_dest = proj_root / "_conversations"
+    assert out_dir == expected_dest
+    assert expected_dest.is_dir()
+    assert len(list(expected_dest.glob("*.md"))) == 1
+
+
+def test_export_claude_project_conversations_raises_without_root_or_dest(tmp_path):
+    """dest_dir=None + project_root=None sur tous -> lève ValueError."""
+    j1 = tmp_path / "c4.jsonl"
+    _write_jsonl(j1, [_user_msg("Msg 4", "2026-03-14T10:00:00.000Z", str(tmp_path))])
+    c = ccl.ClaudeConv(conv_id="conv-4444", project="NoRoot", path=j1, project_root=None)
+
+    with pytest.raises(ValueError, match="Racine de projet inconnue"):
+        ccl.export_claude_project_conversations([c], dest_dir=None)
+
+    # Liste vide sans dest_dir
+    with pytest.raises(ValueError, match="Racine de projet inconnue"):
+        ccl.export_claude_project_conversations([], dest_dir=None)
+
+
+def test_export_claude_project_conversations_progress_cb(tmp_path):
+    """progress_cb appelé une fois par conversation."""
+    convs = []
+    for i in range(3):
+        p = tmp_path / f"sess_{i}.jsonl"
+        _write_jsonl(p, [_user_msg(f"Text {i}", "2026-03-14T10:00:00.000Z", str(tmp_path))])
+        convs.append(ccl.ClaudeConv(conv_id=f"id-{i}", project="P", path=p, title=f"T{i}"))
+
+    calls = []
+    def _cb(curr, tot, cid):
+        calls.append((curr, tot, cid))
+
+    ok, fail, _ = ccl.export_claude_project_conversations(convs, dest_dir=tmp_path / "out", progress_cb=_cb)
+    assert ok == 3
+    assert fail == 0
+    assert len(calls) == 3
+    assert calls[0] == (1, 3, "id-0")
+    assert calls[1] == (2, 3, "id-1")
+    assert calls[2] == (3, 3, "id-2")
+
+

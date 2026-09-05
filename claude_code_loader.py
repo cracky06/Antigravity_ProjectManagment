@@ -336,3 +336,37 @@ def export_claude_conversation_to_project(conv: "ClaudeConv") -> tuple[bool, str
 def export_claude_conversation_to_path(conv: "ClaudeConv", out_path: str | Path) -> tuple[bool, str]:
     """Écrit l'export Markdown à l'emplacement choisi par l'utilisateur."""
     return _write_claude_export(conv, Path(out_path))
+
+
+def export_claude_project_conversations(
+    convs, dest_dir: "Path | None" = None, progress_cb=None
+) -> tuple[int, int, Path]:
+    """Exporte en masse toutes les conversations `convs` d'un projet Claude
+    Code en Markdown (équivalent de `data_loader.export_project_conversations`).
+
+    `dest_dir` par défaut : `<project_root>/_conversations/` du 1er `convs`.
+    `convs` : itérable de `ClaudeConv`. Retourne (nb_ok, nb_échecs, dest_dir).
+    """
+    conv_list = list(convs)
+    if dest_dir is None:
+        root = conv_list[0].project_root if conv_list else None
+        if not root:
+            raise ValueError("Racine de projet inconnue et aucun dest_dir fourni.")
+        dest_dir = Path(root) / "_conversations"
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    ok = fail = 0
+    for i, c in enumerate(conv_list):
+        out_path = dest_dir / default_claude_export_filename(c)
+        success, _msg = _write_claude_export(c, out_path)
+        if success:
+            ok += 1
+        else:
+            fail += 1
+        if progress_cb:
+            progress_cb(i + 1, len(conv_list), c.conv_id)
+    logger.debug(
+        "export_claude_project_conversations : %d ok / %d échecs -> %s", ok, fail, dest_dir
+    )
+    return ok, fail, dest_dir
