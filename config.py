@@ -162,8 +162,16 @@ def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     return {
         "v2.5": {
             "✨ Nouvelles fonctionnalités (feat)": [
-                "Nouvelle source de données « Claude Code / Desktop » (sélecteur en haut de la barre latérale) : parcourt les conversations stockées localement par Claude Code (VS Code) et l'application Claude Desktop (~/.claude/projects/), en lecture seule pour l'instant",
-                "Arbre Projet → conversations (triées par date), avec titre, badge d'origine (VS Code / Desktop) et date ; le dialogue s'affiche avec le même rendu visuel riche que la vue Antigravity",
+                "Nouvelle source de données « Claude Code / Desktop » (sélecteur en haut de la barre latérale) : parcourt les conversations stockées localement par Claude Code (VS Code) et l'application Claude Desktop (~/.claude/projects/)",
+                "Même expérience que la vue Antigravity : arbre en 3 sections (PROJETS / CONVERSATIONS HORS PROJET / CONVERSATIONS RÉCENTES), filtre par projet, badge d'origine (VS Code / Desktop) et date, dialogue avec le même rendu visuel riche",
+                "Recherche globale plein texte dans les conversations Claude Code (3 modes : contient / mots / regex), index dédié",
+                "Recherche locale dans la conversation ouverte (Ctrl+F) : surlignage, navigation entre occurrences",
+                "Export d'une conversation ou de tout un projet en Markdown, et export d'un projet entier en PDF — écrits dans le dossier _conversations/ du vrai dossier de code du projet",
+                "Suppression et déplacement volontairement absents pour cette source (ce sont des fichiers gérés par Claude Code, pas par l'application)",
+            ],
+            "🐛 Corrections (fix)": [
+                "Les compteurs de conversations manquaient sur les titres de section « PROJETS » et « CONVERSATIONS RÉCENTES » (sur les deux sources) — ajoutés",
+                "Une session Claude Code démarrée sur une autre machine ou interface (sans dossier local associé) mais contenant un vrai échange n'était plus visible — elle apparaît maintenant sous « CONVERSATIONS HORS PROJET »",
             ],
         },
         "v2.4": {

@@ -19,7 +19,10 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Section HORS PROJET : n'affiche que les conversations avec un vrai dialogue (sessions techniques des sous-agents ignorées) *(v2.0)*
 - Conversations sans titre : affichage `<id> — <1re ligne d'un artéfact>` (task.md / walkthrough.md) *(v2.0)*
 - **Interlignage resserré** (arborescence plus dense) *(v1.9)*
-- **Sélecteur de source** : bascule entre Antigravity et Claude Code / Claude Desktop (lecture seule) — parcourt les conversations stockées localement par Claude Code (VS Code) et l'app Claude Desktop, arbre Projet → conversations avec badge d'origine et date *(v2.5)*
+- **Compteur de conversations** sur les titres de section « PROJETS » et « CONVERSATIONS RÉCENTES » *(v2.5)*
+- **Sélecteur de source** : bascule entre Antigravity et Claude Code / Claude Desktop — parcourt les conversations stockées localement par Claude Code (VS Code) et l'app Claude Desktop *(v2.5)*
+- La source Claude Code offre la **même expérience** : arbre en 3 sections (PROJETS / HORS PROJET / RÉCENTES), filtre par projet, badge d'origine (VS Code / Desktop) et date, recherche globale, find bar locale, export Markdown/PDF *(v2.5)*
+- Une session Claude Code démarrée sur une autre machine ou interface (sans dossier local) mais avec un vrai échange apparaît en « CONVERSATIONS HORS PROJET » plutôt que d'être perdue *(v2.5)*
 
 ---
 
@@ -57,6 +60,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - **Reconstruction automatique** de l'index s'il est corrompu, avec repli sur la recherche à la volée *(v1.5)*
 - Bouton **« Réindexer »** dans les Paramètres + affichage de l'état de l'index (prêt / absent / corrompu) *(v1.5)*
 - **Indexation au fil de l'eau** : l'index se met à jour dès qu'une conversation est consultée *(v2.2)*
+- La recherche globale fonctionne aussi sur la source **Claude Code / Desktop** (index dédié, mêmes 3 modes) *(v2.5)*
 
 ### Barre de recherche locale (dans une discussion)
 
@@ -70,6 +74,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Le point `.` d'une regex ne franchit plus une fin de ligne *(v1.8)*
 - Occurrence courante en **orange**, les autres en **jaune** (plus recouverte par le fond de sélection) *(v1.8)*
 - Motif regex invalide → bordure rouge + 0 résultat *(v1.6)*
+- Fonctionne aussi dans les conversations de la source **Claude Code / Desktop** *(v2.5)*
 
 ---
 
@@ -94,6 +99,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - La page de garde du PDF illustre automatiquement le projet si un visuel évident est trouvé dans ses dossiers `assets` (background, splash, logo, nom du projet, ou une icône .ico à défaut) *(v2.4)*
 - **Archiver (ZIP) et supprimer un projet** : crée un ZIP de toutes les conversations (Markdown + images) puis supprime le projet en cascade — l'historique est conservé après suppression *(v2.4)*
 - Garde-fou : l'archive ZIP ne peut pas être placée dans le dossier qui va être supprimé *(v2.4)*
+- **Source Claude Code / Desktop** : export Markdown (une conversation ou tout un projet) et export PDF du projet, écrits dans le dossier `_conversations/` du vrai dossier de code du projet. Pas de suppression ni de déplacement (fichiers gérés par Claude Code) *(v2.5)*
 
 ---
 
