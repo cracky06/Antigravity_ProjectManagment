@@ -87,3 +87,85 @@ def test_move_conversation_nonexistent():
     ok, msg = move_conversation("00000000-0000-0000-0000-000000000000", "TestProject")
     assert ok is True
 
+
+# ---------------------------------------------------------------------------
+# Origine App vs IDE d'une conversation Antigravity
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def gemini_tree(tmp_path, monkeypatch):
+    """Arborescence .gemini/ factice ; renvoie un helper pour peupler les sous-dossiers."""
+    parent = tmp_path / ".gemini"
+    (parent / "antigravity-ide").mkdir(parents=True)
+    monkeypatch.setattr("data_loader.get_antigravity_root", lambda: parent / "antigravity-ide")
+
+    def place(sub: str, conv_id: str, *, brain: bool = False, db: bool = False, pb: bool = False):
+        base = parent / sub
+        if brain:
+            (base / "brain" / conv_id).mkdir(parents=True, exist_ok=True)
+        if db or pb:
+            (base / "conversations").mkdir(parents=True, exist_ok=True)
+        if db:
+            (base / "conversations" / f"{conv_id}.db").write_bytes(b"x")
+        if pb:
+            (base / "conversations" / f"{conv_id}.pb").write_bytes(b"x")
+
+    return place
+
+
+def test_detect_origin_ide_only(gemini_tree):
+    from data_loader import _detect_origin
+
+    cid = "11111111-1111-1111-1111-111111111111"
+    gemini_tree("antigravity-ide", cid, db=True)
+    assert _detect_origin(cid) == "ide"
+
+
+def test_detect_origin_app_only(gemini_tree):
+    from data_loader import _detect_origin
+
+    cid = "22222222-2222-2222-2222-222222222222"
+    gemini_tree("antigravity", cid, brain=True)
+    assert _detect_origin(cid) == "app"
+
+
+def test_detect_origin_both_same_richness_is_ide_plus_app(gemini_tree):
+    from data_loader import _detect_origin
+
+    cid = "33333333-3333-3333-3333-333333333333"
+    gemini_tree("antigravity-ide", cid, brain=True)
+    gemini_tree("antigravity", cid, brain=True)
+    assert _detect_origin(cid) == "ide+app"
+
+
+def test_detect_origin_brain_wins_over_orphan_pb(gemini_tree):
+    """Les 3 conversations historiques : brain/ côté app, simple .pb côté IDE."""
+    from data_loader import _detect_origin
+
+    cid = "44444444-4444-4444-4444-444444444444"
+    gemini_tree("antigravity", cid, brain=True, pb=True)
+    gemini_tree("antigravity-ide", cid, pb=True)
+    assert _detect_origin(cid) == "app"
+
+
+def test_detect_origin_backup_only_maps_to_app(gemini_tree):
+    from data_loader import _detect_origin
+
+    cid = "55555555-5555-5555-5555-555555555555"
+    gemini_tree("antigravity-backup", cid, pb=True)
+    assert _detect_origin(cid) == "app"
+
+
+def test_detect_origin_absent_is_empty(gemini_tree):
+    from data_loader import _detect_origin
+
+    assert _detect_origin("99999999-9999-9999-9999-999999999999") == ""
+
+
+def test_conversation_info_origin_label():
+    base = dict(conv_id="c", title="t", project="p", workspace="w", last_activity=None)
+    assert ConversationInfo(**base, origin="ide").origin_label == "IDE"
+    assert ConversationInfo(**base, origin="app").origin_label == "App"
+    assert ConversationInfo(**base, origin="ide+app").origin_label == "IDE+App"
+    assert ConversationInfo(**base).origin_label == ""
+    assert ConversationInfo(**base, origin="bogus").origin_label == ""
+

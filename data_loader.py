@@ -396,6 +396,57 @@ def _find_brain_path(conv_id: str) -> Path | None:
     return None
 
 
+#: sous-dossiers de .gemini/ considérés comme des sources « vivantes »
+#: (antigravity-backup est une sauvegarde passive : voir _detect_origin)
+_LIVE_SUBS = ("antigravity-ide", "antigravity")
+
+
+def _conv_richness_in(sub: str, gemini_parent: Path, conv_id: str) -> int:
+    """Niveau de présence de la conversation dans `.gemini/<sub>/` :
+    2 = dossier brain/ (données complètes : transcript, artéfacts),
+    1 = seulement un fichier conversations/<cid>.{db,pb} (reliquat / base légère),
+    0 = absente.
+    """
+    base = gemini_parent / sub
+    if (base / "brain" / conv_id).is_dir():
+        return 2
+    conv_dir = base / "conversations"
+    if (conv_dir / f"{conv_id}.db").is_file() or (conv_dir / f"{conv_id}.pb").is_file():
+        return 1
+    return 0
+
+
+def _detect_origin(conv_id: str) -> str:
+    """Origine d'une conversation Antigravity : "ide", "app", "ide+app" ou "".
+
+    Aucune métadonnée de provenance n'existe dans les fichiers (confirmé avec
+    l'agent Antigravity) : la seule information fiable est le dossier `.gemini/`
+    où résident les données. Règles :
+      - le dossier `brain/` (présence de niveau 2) fait autorité : s'il n'est
+        que d'un côté, c'est cette origine, même si un `.pb` orphelin traîne
+        de l'autre (cas des 3 conversations historiques recopiées) ;
+      - "ide+app" seulement si les deux côtés ont le même niveau de présence ;
+      - `antigravity-backup` est une sauvegarde passive, jamais une origine à
+        lui seul — rattachée à l'app dont elle est l'instantané.
+    """
+    _, antigravity_root, _, _, _ = get_paths()
+    gemini_parent = antigravity_root.parent
+    r_ide = _conv_richness_in("antigravity-ide", gemini_parent, conv_id)
+    r_app = _conv_richness_in("antigravity", gemini_parent, conv_id)
+
+    if r_ide and r_app:
+        if r_ide == r_app:
+            return "ide+app"
+        return "ide" if r_ide > r_app else "app"
+    if r_ide:
+        return "ide"
+    if r_app:
+        return "app"
+    if _conv_richness_in("antigravity-backup", gemini_parent, conv_id):
+        return "app"
+    return ""
+
+
 def _find_ide_sqlite_db(conv_id: str):
     """Localise `conversations/<conv_id>.db` (Antigravity IDE) si présent.
 
@@ -762,7 +813,11 @@ class ConversationInfo:
         "workspace",
         "last_activity",
         "rel_time",
+        "origin",
     )
+
+    #: origine -> libellé de badge affiché dans l'arbre
+    _ORIGIN_LABELS = {"ide": "IDE", "app": "App", "ide+app": "IDE+App"}
 
     def __init__(
         self,
@@ -771,6 +826,7 @@ class ConversationInfo:
         project: str,
         workspace: str,
         last_activity: datetime | None,
+        origin: str = "",
     ):
         self.conv_id = conv_id
         self.title = title
@@ -778,6 +834,14 @@ class ConversationInfo:
         self.workspace = workspace
         self.last_activity = last_activity
         self.rel_time = relative_time(last_activity)
+        #: "ide" (Antigravity IDE), "app" (application Antigravity),
+        #: "ide+app" (présente dans les deux) ou "" (indéterminé)
+        self.origin = origin
+
+    @property
+    def origin_label(self) -> str:
+        """Libellé court pour le badge d'origine, "" si indéterminé."""
+        return self._ORIGIN_LABELS.get(self.origin, "")
 
 
 def _extract_workspace_from_transcript(conv_id: str) -> str:
@@ -905,7 +969,7 @@ def build_project_map():
 
         proj = override_proj if override_proj else workspace_to_project(workspace)
 
-        info = ConversationInfo(cid, title, proj, workspace, last_dt)
+        info = ConversationInfo(cid, title, proj, workspace, last_dt, _detect_origin(cid))
         all_convs.append(info)
 
         if proj:

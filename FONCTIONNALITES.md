@@ -20,6 +20,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Conversations sans titre : affichage `<id> — <1re ligne d'un artéfact>` (task.md / walkthrough.md) *(v2.0)*
 - **Interlignage resserré** (arborescence plus dense) *(v1.9)*
 - **Compteur de conversations** sur les titres de section « PROJETS » et « CONVERSATIONS RÉCENTES » *(v2.5)*
+- **Badge d'origine App / IDE** sur les conversations Antigravity : `[App]` (application Antigravity) ou `[IDE]` (Antigravity IDE), avec le logo Antigravity en icône (fond blanc / fond noir) pour les distinguer *(v2.6)*
 - **Sélecteur de source** : bascule entre Antigravity et Claude Code / Claude Desktop — parcourt les sessions Claude Code liées à un dossier de dev, qu'elles viennent de l'extension VS Code ou de l'onglet « Code » de Claude Desktop *(v2.5)*
 - Le chat « Home » de Claude Desktop (conversations non liées à un dossier de code) n'est pas accessible : il n'est stocké que côté serveur claude.ai, jamais en local *(v2.5)*
 - La source Claude Code offre la **même expérience** : arbre en 3 sections (PROJETS / HORS PROJET / RÉCENTES), filtre par projet, badge d'origine (VS Code / Desktop) et date, recherche globale, find bar locale, export Markdown/PDF *(v2.5)*
