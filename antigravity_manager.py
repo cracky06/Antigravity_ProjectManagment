@@ -3213,6 +3213,14 @@ class AntigravityManagerWindow(QMainWindow):
             root = convs[0].project_root if convs else None
             act_open.setEnabled(bool(root and root.is_dir()))
             act_open.triggered.connect(lambda: self._open_claude_project_folder(convs[0]) if convs else None)
+
+            menu.addSeparator()
+            n = len(convs)
+            act_pdf = menu.addAction("📄 Exporter le projet en PDF…")
+            act_pdf.setEnabled(n > 0)
+            act_pdf.triggered.connect(
+                lambda checked=False, p=proj_name, cs=list(convs): self._export_claude_project_pdf(p, cs)
+            )
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _open_claude_project_folder(self, conv):
@@ -3247,6 +3255,38 @@ class AntigravityManagerWindow(QMainWindow):
             self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
         else:
             QMessageBox.critical(self, "Échec de l'export", result)
+
+    def _export_claude_project_pdf(self, project_name: str, convs: list):
+        """Assemble toutes les conversations Claude Code du projet dans un
+        seul PDF (même moteur Edge/Chromium headless que côté Antigravity)."""
+        if not convs:
+            return
+        root = convs[0].project_root
+        default_name = f"{project_name}_{__import__('datetime').datetime.now():%Y%m%d}.pdf"
+        suggested = str((root / default_name) if root else Path.home() / default_name)
+        pdf_path, _ = QFileDialog.getSaveFileName(
+            self, "Exporter le projet en PDF", suggested, "Document PDF (*.pdf)"
+        )
+        if not pdf_path:
+            return
+
+        from pdf_export_html import export_claude_project_to_pdf
+
+        self.status_bar.showMessage(
+            f"📄 Génération du PDF de « {project_name} » ({len(convs)} conv.)…"
+        )
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            ok, result = export_claude_project_to_pdf(project_name, convs, pdf_path)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if ok:
+            self.status_bar.showMessage(f"📄 PDF créé : {result}", 8000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(result))
+        else:
+            QMessageBox.critical(self, "Échec de l'export PDF", result)
 
     # -----------------------------------------------------------------
     # Export / archivage au niveau d'un PROJET
