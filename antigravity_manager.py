@@ -71,7 +71,13 @@ from data_loader import (
     _find_brain_path,
 )
 import search_index
-from claude_code_loader import build_claude_project_map, load_claude_messages
+from claude_code_loader import (
+    build_claude_project_map,
+    load_claude_messages,
+    default_claude_export_filename,
+    export_claude_conversation_to_project,
+    export_claude_conversation_to_path,
+)
 
 try:
     import markdown
@@ -2873,8 +2879,11 @@ class AntigravityManagerWindow(QMainWindow):
 
         dtype = data[0]
         if dtype in ("claude_project", "claude_conv"):
-            # Source Claude Code / Desktop : lecture seule pour l'instant (v2.5),
-            # aucune action de gestion (export/déplacement/suppression) exposée.
+            # Source Claude Code / Desktop (v2.5) : export Markdown seulement.
+            # Suppression/déplacement délibérément absents — ce sont des
+            # fichiers gérés par Claude Code, pas par cette app (garde-fou
+            # demandé explicitement).
+            self._build_claude_context_menu(dtype, data, pos)
             return
         menu = QMenu(self)
 
@@ -2992,6 +3001,69 @@ class AntigravityManagerWindow(QMainWindow):
         ok, result = export_conversation_to_path(
             c_info.conv_id, path, title=c_info.title or "", project=c_info.project or ""
         )
+        if ok:
+            self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
+        else:
+            QMessageBox.critical(self, "Échec de l'export", result)
+
+    # -----------------------------------------------------------------
+    # Menu contextuel & export Markdown — source Claude Code / Desktop (v2.5)
+    # Volontairement limité à l'export : pas de suppression/déplacement, ce
+    # sont des fichiers gérés par Claude Code, pas par cette app.
+    # -----------------------------------------------------------------
+    def _build_claude_context_menu(self, dtype: str, data: tuple, pos):
+        menu = QMenu(self)
+        if dtype == "claude_conv":
+            conv = data[1]
+            act_open = menu.addAction("📂 Ouvrir le dossier du projet dans l'Explorateur")
+            act_open.setEnabled(bool(conv.project_root and conv.project_root.is_dir()))
+            act_open.triggered.connect(lambda: self._open_claude_project_folder(conv))
+
+            act_copy_id = menu.addAction("📋 Copier l'ID de session")
+            act_copy_id.triggered.connect(lambda: QApplication.clipboard().setText(conv.conv_id))
+
+            menu.addSeparator()
+            act_exp_proj = menu.addAction("💾 Exporter en Markdown dans le projet")
+            act_exp_proj.setEnabled(bool(conv.project_root))
+            act_exp_proj.triggered.connect(lambda checked=False, c=conv: self._export_claude_conv_to_project(c))
+            act_exp_as = menu.addAction("💾 Exporter en Markdown…")
+            act_exp_as.triggered.connect(lambda checked=False, c=conv: self._export_claude_conv_as(c))
+        elif dtype == "claude_project":
+            _, proj_name, convs = data
+            act_open = menu.addAction(f"📂 Ouvrir '{proj_name}' dans l'Explorateur")
+            root = convs[0].project_root if convs else None
+            act_open.setEnabled(bool(root and root.is_dir()))
+            act_open.triggered.connect(lambda: self._open_claude_project_folder(convs[0]) if convs else None)
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _open_claude_project_folder(self, conv):
+        if conv.project_root and conv.project_root.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(conv.project_root)))
+        else:
+            QMessageBox.warning(self, "Erreur", "Dossier de projet introuvable.")
+
+    def _export_claude_conv_to_project(self, conv):
+        """Écrit l'export dans `<project_root>/_conversations/`."""
+        ok, result = export_claude_conversation_to_project(conv)
+        if ok:
+            self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(result).parent)))
+        else:
+            QMessageBox.critical(self, "Échec de l'export", result)
+
+    def _export_claude_conv_as(self, conv):
+        """Demande l'emplacement puis écrit l'export Markdown."""
+        suggested = default_claude_export_filename(conv)
+        start_dir = str(conv.project_root) if conv.project_root else str(Path.home())
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exporter la conversation en Markdown",
+            str(Path(start_dir) / suggested),
+            "Fichiers Markdown (*.md);;Tous les fichiers (*)",
+        )
+        if not path:
+            return
+        ok, result = export_claude_conversation_to_path(conv, path)
         if ok:
             self.status_bar.showMessage(f"💾 Exporté : {result}", 6000)
         else:

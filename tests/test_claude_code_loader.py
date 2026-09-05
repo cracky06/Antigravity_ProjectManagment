@@ -242,3 +242,130 @@ def test_load_messages_empty_session_returns_empty_list(tmp_path):
 
 def test_load_messages_missing_file_returns_empty_list(tmp_path):
     assert ccl.load_claude_messages(tmp_path / "does_not_exist.jsonl") == []
+
+
+# --- Export Markdown (v2.5) --------------------------------------------------
+from datetime import datetime
+
+
+def test_default_claude_export_filename():
+    conv = ccl.ClaudeConv(
+        conv_id="12345678-abcd-ef00-1122-334455667788",
+        project="TestProj",
+        path=ccl.Path("dummy.jsonl"),
+        title="bugs & features:",
+        last_dt=datetime(2026, 3, 14, 15, 30),
+    )
+    fname = ccl.default_claude_export_filename(conv)
+    # _slugify (data_loader) ne touche que la ponctuation -> " & " devient "-",
+    # ":" est retiré, mais casse et accents sont conservés tels quels.
+    assert fname == "20260314_bugs-features_12345678.md"
+    assert fname.endswith(".md")
+
+    # Sans date
+    conv_nodate = ccl.ClaudeConv(
+        conv_id="abcdef12-0000-0000-0000-000000000000",
+        project="P",
+        path=ccl.Path("dummy.jsonl"),
+        title="Sans Date",
+        last_dt=None,
+    )
+    assert ccl.default_claude_export_filename(conv_nodate).startswith("nodate_Sans-Date_")
+
+
+def test_build_claude_conversation_markdown(tmp_path):
+    cwd = str(tmp_path / "MonProjet")
+    jsonl_path = tmp_path / "s10.jsonl"
+    _write_jsonl(
+        jsonl_path,
+        [
+            _user_msg("Bonjour, peux-tu m'aider ?", "2026-03-14T10:00:00.000Z", cwd),
+            _assistant_msg("Bien sûr ! Que souhaites-tu faire ?", "2026-03-14T10:00:05.000Z", cwd),
+        ],
+    )
+    conv = ccl.ClaudeConv(
+        conv_id="sess-test-12345678",
+        project="MonProjet",
+        path=jsonl_path,
+        title="Session d'aide",
+        last_dt=datetime(2026, 3, 14, 10, 0, 5),
+        entrypoints={"claude-vscode"},
+        project_root=tmp_path / "MonProjet",
+    )
+    md = ccl.build_claude_conversation_markdown(conv)
+    assert "# Session d'aide" in md
+    assert "- **Projet :** MonProjet" in md
+    assert "- **Origine :** VS Code" in md
+    assert "- **ID de session :** `sess-test-12345678`" in md
+    assert "### 👤 Utilisateur" in md
+    assert "Bonjour, peux-tu m'aider ?" in md
+    assert "### ✳️ Claude" in md
+    assert "Bien sûr ! Que souhaites-tu faire ?" in md
+
+
+def test_build_claude_conversation_markdown_empty_session(tmp_path):
+    jsonl_path = tmp_path / "empty_sess.jsonl"
+    _write_jsonl(jsonl_path, [{"type": "bridge-session", "sessionId": "x"}])
+    conv = ccl.ClaudeConv(
+        conv_id="empty-session-id",
+        project="Vide",
+        path=jsonl_path,
+        title="Vide",
+    )
+    md = ccl.build_claude_conversation_markdown(conv)
+    assert "*Aucun message textuel dans cette session.*" in md
+
+
+def test_export_claude_conversation_to_project(tmp_path):
+    proj_root = tmp_path / "ProjetReel"
+    proj_root.mkdir()
+    jsonl_path = tmp_path / "s11.jsonl"
+    _write_jsonl(
+        jsonl_path,
+        [_user_msg("Hello", "2026-03-14T10:00:00.000Z", str(proj_root))],
+    )
+    conv = ccl.ClaudeConv(
+        conv_id="export-test-1111",
+        project="ProjetReel",
+        path=jsonl_path,
+        title="Test Export Projet",
+        last_dt=datetime(2026, 3, 14, 10, 0),
+        project_root=proj_root,
+    )
+    ok, result_path = ccl.export_claude_conversation_to_project(conv)
+    assert ok is True
+    out_file = ccl.Path(result_path)
+    assert out_file.exists()
+    assert out_file.parent == proj_root / "_conversations"
+    assert "Test Export Projet" in out_file.read_text(encoding="utf-8")
+
+    # Sans project_root
+    conv_no_root = ccl.ClaudeConv(
+        conv_id="export-no-root",
+        project="SansRoot",
+        path=jsonl_path,
+        project_root=None,
+    )
+    ok_no, err = ccl.export_claude_conversation_to_project(conv_no_root)
+    assert ok_no is False
+    assert "Racine de projet inconnue" in err
+
+
+def test_export_claude_conversation_to_path(tmp_path):
+    jsonl_path = tmp_path / "s12.jsonl"
+    _write_jsonl(
+        jsonl_path,
+        [_user_msg("Coucou", "2026-03-14T10:00:00.000Z", str(tmp_path))],
+    )
+    conv = ccl.ClaudeConv(
+        conv_id="export-test-2222",
+        project="TestPath",
+        path=jsonl_path,
+        title="Test Export Path",
+    )
+    custom_target = tmp_path / "exports" / "custom_name.md"
+    ok, result = ccl.export_claude_conversation_to_path(conv, custom_target)
+    assert ok is True
+    assert custom_target.exists()
+    assert "Test Export Path" in custom_target.read_text(encoding="utf-8")
+

@@ -55,6 +55,7 @@ class ClaudeConv:
     title: str = ""
     last_dt: datetime | None = None
     entrypoints: set[str] = field(default_factory=set)
+    project_root: Path | None = None   # cwd réel (racine du dossier de code)
 
     @property
     def origin_label(self) -> str:
@@ -141,6 +142,7 @@ def _scan_session(path: Path) -> ClaudeConv | None:
         title=title,
         last_dt=last_dt,
         entrypoints=entrypoints,
+        project_root=Path(project_path),
     )
 
 
@@ -233,3 +235,86 @@ def load_claude_messages(conv_path: Path) -> list[dict]:
     # (fichier reconstruit, session fusionnée, etc.).
     messages.sort(key=lambda m: m["epoch"])
     return messages
+
+
+# --- Export Markdown (v2.5) --------------------------------------------------
+# Parité avec l'export Antigravity (data_loader.build_conversation_markdown /
+# export_conversation_to_project / export_conversation_to_path), en plus
+# simple : pas d'images à corréler ici (Claude Code ne génère pas d'images
+# dans ces transcripts). Réutilise `_slugify` / `_sanitize_message_text` de
+# data_loader plutôt que de les dupliquer.
+def default_claude_export_filename(conv: "ClaudeConv") -> str:
+    """Nom de fichier proposé : <date>_<titre-slug>_<id8>.md."""
+    from data_loader import _slugify
+
+    date_part = conv.last_dt.strftime("%Y%m%d") if conv.last_dt else "nodate"
+    slug = _slugify(conv.title or conv.conv_id[:12])
+    return f"{date_part}_{slug}_{conv.conv_id[:8]}.md"
+
+
+def build_claude_conversation_markdown(conv: "ClaudeConv") -> str:
+    """Construit le document Markdown complet d'une conversation Claude Code.
+
+    En-tête (titre / projet / origine / date / ID) + messages
+    (### 👤 Utilisateur / ### ✳️ Claude).
+    """
+    from data_loader import _sanitize_message_text
+
+    date_str = conv.last_dt.strftime("%Y-%m-%d %H:%M") if conv.last_dt else "date inconnue"
+    lines: list[str] = [
+        f"# {conv.title or conv.conv_id[:12]}",
+        "",
+        f"- **Projet :** {conv.project or '(aucun)'}",
+        f"- **Origine :** {conv.origin_label or 'inconnue'}",
+        f"- **Dernière activité :** {date_str}",
+        f"- **ID de session :** `{conv.conv_id}`",
+        f"- **Exporté le :** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+        "---",
+        "",
+    ]
+
+    messages = load_claude_messages(conv.path)
+    if not messages:
+        lines.append("*Aucun message textuel dans cette session.*")
+        return "\n".join(lines)
+
+    for m in messages:
+        is_user = m.get("role") == "user"
+        heading = "### 👤 Utilisateur" if is_user else "### ✳️ Claude"
+        ep = m.get("epoch") or 0.0
+        ts_full = datetime.fromtimestamp(ep).strftime("%Y-%m-%d %H:%M") if ep else ""
+        text = _sanitize_message_text((m.get("text", "") or "").rstrip(), conv.project_root)
+        lines.append(f"{heading}{f' — {ts_full}' if ts_full else ''}")
+        lines.append("")
+        lines.append(text)
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _write_claude_export(conv: "ClaudeConv", out_path: Path) -> tuple[bool, str]:
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        md = build_claude_conversation_markdown(conv)
+        out_path.write_text(md, encoding="utf-8")
+        logger.debug("Conversation Claude Code %s exportée -> %s", conv.conv_id, out_path)
+        return True, str(out_path)
+    except Exception as exc:
+        logger.warning("Échec export vers %s pour %s : %s", out_path, conv.conv_id, exc)
+        return False, f"Échec de l'export : {exc}"
+
+
+def export_claude_conversation_to_project(conv: "ClaudeConv") -> tuple[bool, str]:
+    """Écrit l'export dans `<project_root>/_conversations/` (le vrai dossier
+    de code du projet, puisqu'un projet Claude Code n'a pas de « racine des
+    projets » centralisée comme Antigravity)."""
+    if not conv.project_root:
+        return False, "Racine de projet inconnue pour cette conversation."
+    out_path = conv.project_root / "_conversations" / default_claude_export_filename(conv)
+    return _write_claude_export(conv, out_path)
+
+
+def export_claude_conversation_to_path(conv: "ClaudeConv", out_path: str | Path) -> tuple[bool, str]:
+    """Écrit l'export Markdown à l'emplacement choisi par l'utilisateur."""
+    return _write_claude_export(conv, Path(out_path))
