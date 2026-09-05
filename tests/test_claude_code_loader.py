@@ -95,6 +95,37 @@ def test_build_project_map_ignores_empty_session(tmp_path):
     assert pm == {}
 
 
+def test_build_project_map_keeps_teleported_session_with_content(tmp_path):
+    """Une session sans AUCUN cwd (ex. « teleported-from », démarrée sur une
+    autre machine/interface) mais avec un vrai dialogue ne doit plus être
+    perdue silencieusement — bug réel trouvé en usage (session
+    MCP-Multi_AI/d632a9cd d'origine, ici avec du contenu simulé)."""
+    _write_jsonl(
+        tmp_path / "e--Dev-MCP-Multi-AI" / "teleported.jsonl",
+        [
+            {"type": "teleported-from", "remoteSessionId": "session_xyz", "messageCount": 2},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Question sans cwd"}]}},
+        ],
+    )
+    pm = ccl.build_claude_project_map(tmp_path)
+    assert len(pm) == 1
+    convs = next(iter(pm.values()))
+    assert len(convs) == 1
+    assert convs[0].project_root is None
+    assert "MCP-Multi-AI" in convs[0].project
+
+
+def test_build_project_map_drops_teleported_session_truly_empty(tmp_path):
+    """Une session teleported-from sans AUCUN message (messageCount: 0, le
+    cas réel observé) reste bien ignorée : rien à afficher."""
+    _write_jsonl(
+        tmp_path / "e--Dev-MCP-Multi-AI" / "teleported_empty.jsonl",
+        [{"type": "teleported-from", "remoteSessionId": "session_xyz", "messageCount": 0}],
+    )
+    pm = ccl.build_claude_project_map(tmp_path)
+    assert pm == {}
+
+
 def test_build_project_map_skips_corrupted_lines(tmp_path):
     """Une ligne JSON corrompue ne doit pas faire planter le scan du reste."""
     path = tmp_path / "e--Dev-Y" / "s2.jsonl"

@@ -1667,33 +1667,40 @@ class AntigravityManagerWindow(QMainWindow):
         active_color = QColor("#f4f4f5" if is_dark else "#0f172a")
         empty_color = QColor("#71717a" if is_dark else "#94a3b8")
 
-        # Source Claude Code / Desktop (v2.5, lecture seule) : arbre Projet ->
-        # conversations (triées par date), respecte le filtre de
-        # project_filter_combo comme la vue Antigravity (ALL ou un projet).
-        # Pas de notion « sans projet » ici (chaque session a un `cwd`).
+        # Source Claude Code / Desktop (v2.5, lecture seule) : même principe
+        # à 3 sections que la vue Antigravity (PROJETS / HORS PROJET /
+        # RÉCENTES) quand le filtre est sur « Tous les projets », ou vue
+        # projet unique quand un projet précis est sélectionné.
         if self._active_source == "claude_code":
             def _add_claude_project_item(proj_name: str, convs, *, expanded: bool) -> QTreeWidgetItem:
                 p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
                 p_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_project", proj_name, convs))
                 p_item.setForeground(0, active_color if convs else empty_color)
                 for c_info in convs:
-                    label = c_info.title or c_info.conv_id[:12]
-                    if len(label) > 40:
-                        label = label[:38] + "…"
-                    origin = f"  •  [{c_info.origin_label}]" if c_info.origin_label else ""
-                    date_str = c_info.last_dt.strftime("%d/%m %H:%M") if c_info.last_dt else ""
-                    time_suffix = f"   {date_str}" if date_str else ""
-                    c_item = QTreeWidgetItem([f"💬  {label}{origin}{time_suffix}"])
-                    c_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_conv", c_info))
-                    p_item.addChild(c_item)
+                    _add_claude_conv_child(p_item, c_info)
                 p_item.setExpanded(expanded)
                 return p_item
+
+            def _add_claude_conv_child(parent: QTreeWidgetItem, c_info, *, badge: bool = False):
+                label = c_info.title or c_info.conv_id[:12]
+                max_len = 34 if badge else 40
+                if len(label) > max_len:
+                    label = label[:max_len - 2] + "…"
+                badge_txt = f"  •  [{c_info.project}]" if badge else ""
+                origin = f"  •  [{c_info.origin_label}]" if c_info.origin_label and not badge else ""
+                date_str = c_info.last_dt.strftime("%d/%m %H:%M") if c_info.last_dt else ""
+                time_suffix = f"   {date_str}" if date_str else ""
+                c_item = QTreeWidgetItem([f"💬  {label}{badge_txt}{origin}{time_suffix}"])
+                c_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_conv", c_info))
+                parent.addChild(c_item)
+                return c_item
 
             claude_filter = "ALL"
             if hasattr(self, "project_filter_combo") and self.project_filter_combo.count() > 0:
                 claude_filter = self.project_filter_combo.currentData() or "ALL"
 
             if claude_filter != "ALL" and claude_filter in self.claude_project_map:
+                # Vue projet unique — équivalent du CAS 2 Antigravity.
                 convs = self.claude_project_map[claude_filter]
                 header_item = QTreeWidgetItem([f"PROJET : {claude_filter} ({len(convs)} convs)"])
                 header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -1704,10 +1711,53 @@ class AntigravityManagerWindow(QMainWindow):
                 self.tree.addTopLevelItem(header_item)
                 header_item.setExpanded(True)
                 self.tree.addTopLevelItem(_add_claude_project_item(claude_filter, convs, expanded=True))
-            else:
-                for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
-                    convs = self.claude_project_map[proj_name]
-                    self.tree.addTopLevelItem(_add_claude_project_item(proj_name, convs, expanded=False))
+                return
+
+            # Vue « Tous les projets » — 3 sections comme côté Antigravity.
+            def _make_section_header(label: str) -> QTreeWidgetItem:
+                it = QTreeWidgetItem([label])
+                it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                it.setForeground(0, header_color)
+                fnt = it.font(0)
+                fnt.setBold(True)
+                it.setFont(0, fnt)
+                self.tree.addTopLevelItem(it)
+                return it
+
+            all_claude_convs = [c for convs in self.claude_project_map.values() for c in convs]
+
+            # --- Section 1 : PROJETS ---------------------------------
+            proj_header_item = _make_section_header("PROJETS")
+            for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
+                convs = self.claude_project_map[proj_name]
+                p_item = _add_claude_project_item(proj_name, convs, expanded=False)
+                proj_header_item.addChild(p_item)
+
+            # --- Section 2 : CONVERSATIONS HORS PROJET ---------------
+            # Cas rare (session « teleported-from » sans cwd local, cf.
+            # claude_code_loader._decode_folder_name) — pas d'équivalent
+            # « conversation_has_dialogue » nécessaire ici : ces sessions ne
+            # sont déjà gardées par le scan que si elles ont un vrai message.
+            no_root_convs = [c for c in all_claude_convs if c.project_root is None]
+            orphan_header_item = _make_section_header(
+                f"CONVERSATIONS HORS PROJET ({len(no_root_convs)})"
+            )
+            for c_info in no_root_convs:
+                _add_claude_conv_child(orphan_header_item, c_info)
+
+            # --- Section 3 : CONVERSATIONS RÉCENTES -------------------
+            recent_header_item = _make_section_header("CONVERSATIONS RÉCENTES")
+            recent_sorted = sorted(
+                all_claude_convs,
+                key=lambda c: c.last_dt or __import__("datetime").datetime.min,
+                reverse=True,
+            )
+            for c_info in recent_sorted[:40]:
+                _add_claude_conv_child(recent_header_item, c_info, badge=True)
+
+            proj_header_item.setExpanded(True)
+            orphan_header_item.setExpanded(True)
+            recent_header_item.setExpanded(False)
             return
 
         filter_val = "ALL"

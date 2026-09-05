@@ -45,6 +45,17 @@ def get_claude_projects_root() -> Path:
     return home / ".claude" / "projects"
 
 
+def _decode_folder_name(folder: str) -> str:
+    """Repli d'affichage quand aucune ligne de la session n'a de `cwd`
+    (ex. session « teleported-from » démarrée ailleurs) : le nom du dossier
+    encode le chemin d'origine avec des tirets à la place des séparateurs
+    (ex. `e--Dev-MCP-Multi-AI`), un décodage exact est ambigu (le nom du
+    projet peut lui-même contenir des tirets). On ne fait qu'un nettoyage
+    approximatif pour rester lisible, avec un préfixe explicite."""
+    cleaned = folder.lstrip("-") or folder
+    return f"(sans dossier local) {cleaned}"
+
+
 @dataclass
 class ClaudeConv:
     """Une session (un fichier `.jsonl`)."""
@@ -121,10 +132,17 @@ def _scan_session(path: Path) -> ClaudeConv | None:
             last_ts = ts
 
     if not cwds:
-        return None  # session sans contenu exploitable (queue-operation seule, etc.)
-
-    project_path = cwds.most_common(1)[0][0]
-    project_name = Path(project_path.replace("\\", "/")).name
+        # Aucun `cwd` dans les métadonnées (ex. session « teleported-from »,
+        # démarrée sur une autre machine/interface) : on ne la jette plus
+        # silencieusement — si elle a un vrai dialogue, on la rattache au nom
+        # du dossier parent (repli imparfait mais visible plutôt que perdue).
+        if not _first_user_text(entries):
+            return None  # vraiment vide (queue-operation seule, etc.)
+        project_name = _decode_folder_name(path.parent.name)
+        project_path = None
+    else:
+        project_path = cwds.most_common(1)[0][0]
+        project_name = Path(project_path.replace("\\", "/")).name
 
     title = ai_title or _first_user_text(entries)[:80]
 
@@ -142,7 +160,7 @@ def _scan_session(path: Path) -> ClaudeConv | None:
         title=title,
         last_dt=last_dt,
         entrypoints=entrypoints,
-        project_root=Path(project_path),
+        project_root=Path(project_path) if project_path else None,
     )
 
 
