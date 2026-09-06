@@ -1048,9 +1048,14 @@ def _get_splash_pixmap():
 
 
 def _antigravity_source_icon(dark: bool) -> QIcon:
-    """Logo Antigravity (le même « A »/montagne, tracé sombre ou blanc selon
-    le thème pour rester lisible sur le fond du sélecteur)."""
-    name = "antigravity_white.svg" if dark else "antigravity_black.svg"
+    """Logo Antigravity (le même « A »/montagne, version sur fond sombre ou
+    clair selon le thème pour rester lisible sur le fond du sélecteur).
+
+    PNG et non SVG : le logo « aurore » d'Antigravity repose sur des filtres
+    `feGaussianBlur`, non supportés par le moteur SVG de Qt — le rendu QIcon
+    serait faux. Le PNG est rasterisé en amont.
+    """
+    name = "antigravity_white.png" if dark else "antigravity_black.png"
     p = _find_asset(f"assets/{name}", name)
     return QIcon(str(p)) if p else QIcon()
 

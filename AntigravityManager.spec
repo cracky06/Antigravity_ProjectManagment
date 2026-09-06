@@ -25,8 +25,8 @@ a = Analysis(
         ('assets/icon.ico', 'assets'),
         ('assets/splash.jpg', 'assets'),
         # v2.5 : icônes du sélecteur de source (Antigravity clair/sombre, Claude)
-        ('assets/antigravity_black.svg', 'assets'),
-        ('assets/antigravity_white.svg', 'assets'),
+        ('assets/antigravity_black.png', 'assets'),
+        ('assets/antigravity_white.png', 'assets'),
         ('assets/claude.png', 'assets'),
         ('VERSION', '.'),
     ],
