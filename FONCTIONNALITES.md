@@ -25,6 +25,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Le chat « Home » de Claude Desktop (conversations non liées à un dossier de code) n'est pas accessible : il n'est stocké que côté serveur claude.ai, jamais en local *(v2.5)*
 - La source Claude Code offre la **même expérience** : arbre en 3 sections (PROJETS / HORS PROJET / RÉCENTES), filtre par projet, badge d'origine (VS Code / Desktop) et date, recherche globale, find bar locale, export Markdown/PDF *(v2.5)*
 - Une session Claude Code démarrée sur une autre machine ou interface (sans dossier local) mais avec un vrai échange apparaît en « CONVERSATIONS HORS PROJET » plutôt que d'être perdue *(v2.5)*
+- **Avertissement de rétention** : Claude Code purge lui-même ses transcrits inactifs (clé `cleanupPeriodDays` de `~/.claude/settings.json`, **défaut 30 jours**, sans notification). Un rappel discret sous l'arbre invite à **exporter en Markdown/PDF** pour conserver une conversation au-delà de ce délai *(v2.6)*
 
 ---
 

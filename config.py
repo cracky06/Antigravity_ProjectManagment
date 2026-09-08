@@ -186,6 +186,7 @@ def get_changelog_data() -> dict[str, dict[str, list[str]]]:
         "v2.6": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Les conversations Antigravity portent un badge d'origine dans la barre latérale : [App] (application Antigravity) ou [IDE] (Antigravity IDE), avec le logo Antigravity en icône (fond blanc / fond noir) pour les distinguer d'un coup d'œil",
+                "Rappel sous la source Claude Code : Claude Code supprime lui-même ses transcrits inactifs (défaut 30 jours, sans notification) — exportez en Markdown/PDF pour conserver une conversation au-delà",
             ],
             "🐛 Corrections (fix)": [
                 "Les conversations récentes de l'Antigravity IDE (stockées en base SQLite dans conversations/*.db, sans dossier brain/) s'affichaient vides : titre illisible, aucune date, aucun message. Elles sont désormais lues intégralement — titre, date, projet et dialogue complet",

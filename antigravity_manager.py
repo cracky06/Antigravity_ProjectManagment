@@ -71,6 +71,11 @@ from data_loader import (
     _find_brain_path,
 )
 import search_index
+
+# Réglage Claude Code (~/.claude/settings.json) qui contrôle la purge
+# automatique des transcrits inactifs — mentionné dans l'UI et les docs.
+_CLAUDE_RETENTION_KEY = "cleanupPeriodDays"
+
 from claude_code_loader import (
     build_claude_project_map,
     load_claude_messages,
@@ -1873,6 +1878,21 @@ class AntigravityManagerWindow(QMainWindow):
             proj_header_item.setExpanded(True)
             orphan_header_item.setExpanded(True)
             recent_header_item.setExpanded(False)
+
+            # Rappel : Claude Code purge lui-même ses transcripts inactifs
+            # (clé `cleanupPeriodDays` de ~/.claude/settings.json, défaut
+            # 30 jours) — sans notification. L'export Markdown/PDF met une
+            # conversation à l'abri de cette purge.
+            note = QTreeWidgetItem([
+                "  ⚠️  Claude Code supprime les transcrits inactifs "
+                f"(défaut 30 j). Exportez pour conserver — voir {_CLAUDE_RETENTION_KEY}."
+            ])
+            note.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            note.setForeground(0, empty_color)
+            f = note.font(0)
+            f.setItalic(True)
+            note.setFont(0, f)
+            self.tree.addTopLevelItem(note)
             return
 
         filter_val = "ALL"
