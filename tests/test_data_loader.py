@@ -89,6 +89,116 @@ def test_move_conversation_nonexistent():
 
 
 # ---------------------------------------------------------------------------
+# Robustesse de la réécriture de agyhub_summaries_proto.pb (move_conversation)
+# Régression : un déplacement a déjà réinitialisé l'index de 14 -> 1 entrée.
+# ---------------------------------------------------------------------------
+def _build_summaries_pb(conv_specs):
+    """Fabrique un agyhub_summaries_proto.pb minimal mais valide.
+
+    conv_specs : liste de (conv_id, workspace_uri). Structure reproduite :
+      field 1 (repeated) = entrée conversation
+        entrée.field 1 = conv_id (string)
+        entrée.field 2 = sous-message
+          sub.field 1 = titre (string)
+          sub.field 9 = sous-message { field 1 = workspace uri }
+    """
+    from data_loader import _encode_proto_field
+
+    out = bytearray()
+    for cid, ws in conv_specs:
+        sub9 = _encode_proto_field(1, 2, ws.encode("utf-8"))
+        sub = (
+            _encode_proto_field(1, 2, f"Titre {cid[:4]}".encode("utf-8"))
+            + _encode_proto_field(9, 2, sub9)
+        )
+        entry = _encode_proto_field(1, 2, cid.encode("utf-8")) + _encode_proto_field(2, 2, sub)
+        out += _encode_proto_field(1, 2, bytes(entry))
+    return bytes(out)
+
+
+@pytest.fixture
+def summaries_tree(tmp_path, monkeypatch):
+    """.gemini/antigravity/ avec un agyhub_summaries_proto.pb à N conversations."""
+    parent = tmp_path / ".gemini"
+    ag = parent / "antigravity"
+    (ag / "brain").mkdir(parents=True)
+    (ag / "conversations").mkdir(parents=True)
+    monkeypatch.setattr("data_loader.get_antigravity_root", lambda: ag)
+    monkeypatch.setattr("data_loader.get_projects_root", lambda: tmp_path / "DEV")
+    (tmp_path / "DEV").mkdir()
+
+    def setup(conv_specs):
+        pb = ag / "agyhub_summaries_proto.pb"
+        pb.write_bytes(_build_summaries_pb(conv_specs))
+        return ag, pb
+
+    return setup
+
+
+def test_move_conversation_preserves_all_index_entries(summaries_tree):
+    """Déplacer une conv ne doit JAMAIS réduire le nombre d'entrées de l'index."""
+    from data_loader import move_conversation, _parse_proto_fields
+
+    specs = [
+        ("aaaaaaaa-0000-0000-0000-000000000001", "file:///d:/DEV/PlayVibe"),
+        ("bbbbbbbb-0000-0000-0000-000000000002", "file:///d:/DEV/Comfyui"),
+        ("cccccccc-0000-0000-0000-000000000003", "file:///d:/DEV/MAESTRO"),
+    ]
+    ag, pb = summaries_tree(specs)
+    (ag / "brain" / specs[0][0]).mkdir()
+
+    ok, _ = move_conversation(specs[0][0], "LocalIA-Extension")
+    assert ok is True
+
+    entries = _parse_proto_fields(pb.read_bytes()).get(1, [])
+    assert len(entries) == 3, "aucune entrée ne doit disparaître lors d'un move"
+
+    # La conv déplacée pointe désormais vers le nouveau projet.
+    blob = pb.read_bytes()
+    assert b"LocalIA-Extension" in blob
+    # Les deux autres workspaces sont intacts.
+    assert b"Comfyui" in blob and b"MAESTRO" in blob
+
+
+def test_move_conversation_aborts_on_entry_loss(summaries_tree, monkeypatch):
+    """Si la relecture du .pb reconstruit montre moins d'entrées, on n'écrit pas.
+
+    Reproduit le mode de panne réel : `_parse_proto_fields` s'arrête sur un octet
+    inattendu (wire-type 3/4, troncature) et ne « voit » plus qu'une fraction des
+    entrées — l'index officiel ne doit pas être remplacé par cette version.
+    """
+    import data_loader
+    from data_loader import move_conversation, _parse_proto_fields as real_parse
+
+    specs = [
+        ("aaaaaaaa-0000-0000-0000-000000000001", "file:///d:/DEV/PlayVibe"),
+        ("bbbbbbbb-0000-0000-0000-000000000002", "file:///d:/DEV/Comfyui"),
+        ("cccccccc-0000-0000-0000-000000000003", "file:///d:/DEV/MAESTRO"),
+    ]
+    ag, pb = summaries_tree(specs)
+    (ag / "brain" / specs[0][0]).mkdir()
+    original = pb.read_bytes()
+
+    # La 1re passe (lecture de l'original) doit être fidèle ; seule la passe de
+    # validation du buffer reconstruit renvoie un résultat tronqué.
+    seen = {"n": 0}
+
+    def flaky_parse(data):
+        res = real_parse(data)
+        seen["n"] += 1
+        if seen["n"] >= 2 and 1 in res and len(res[1]) > 1:
+            res[1] = res[1][:1]  # simule une troncature du décodage
+        return res
+
+    monkeypatch.setattr(data_loader, "_parse_proto_fields", flaky_parse)
+
+    ok, _ = move_conversation(specs[0][0], "LocalIA-Extension")
+    assert ok is True  # pas de crash
+    assert pb.read_bytes() == original, "le .pb officiel doit rester intact en cas de perte d'entrées"
+    assert not (ag / "agyhub_summaries_proto.pb.tmp").exists()
+
+
+# ---------------------------------------------------------------------------
 # Origine App vs IDE d'une conversation Antigravity
 # ---------------------------------------------------------------------------
 @pytest.fixture

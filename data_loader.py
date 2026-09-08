@@ -1451,22 +1451,52 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
                 if top_f != 1:
                     new_top[top_f] = top_items
 
-            rebuilt_file = bytearray()
-            for tf, titems in new_top.items():
-                for tw, tv in titems:
-                    rebuilt_file.extend(_encode_proto_field(tf, tw, tv))
+            rebuilt_file = bytes(
+                b"".join(
+                    _encode_proto_field(tf, tw, tv)
+                    for tf, titems in new_top.items()
+                    for tw, tv in titems
+                )
+            )
+
+            # Garde-fou : le protobuf reconstruit doit se relire et conserver
+            # AU MOINS autant d'entrées que l'original. Un décodage partiel
+            # (wire-types 3/4, octet inattendu -> break dans _parse_proto_fields)
+            # peut silencieusement tronquer l'index ; on refuse alors d'écrire
+            # plutôt que de réinitialiser la liste des conversations.
+            check = _parse_proto_fields(rebuilt_file)
+            n_before = len(entries)
+            n_after = len(check.get(1, []))
+            if n_after < n_before:
+                logger.error(
+                    "Réécriture de %s ANNULÉE : %d entrées -> %d (perte). "
+                    "Fichier officiel laissé intact.",
+                    pb_path, n_before, n_after,
+                )
+                continue
 
             # Sauvegarde préventive AVANT d'écraser le fichier officiel.
             _backup_pb_file(pb_path)
-            pb_path.write_bytes(bytes(rebuilt_file))
+            # Écriture atomique : tmp + os.replace (atomique sur Windows et POSIX)
+            # pour qu'un crash en cours d'écriture ne laisse jamais un .pb tronqué.
+            tmp_path = pb_path.with_name(pb_path.name + ".tmp")
+            tmp_path.write_bytes(rebuilt_file)
+            os.replace(tmp_path, pb_path)
             logger.debug(
-                "agyhub_summaries_proto.pb réécrit (%s) pour move %s -> %s",
-                sub, conv_id, target_project_name,
+                "agyhub_summaries_proto.pb réécrit (%s) pour move %s -> %s "
+                "(%d entrées)",
+                sub, conv_id, target_project_name, n_after,
             )
         except Exception as exc:
             logger.warning(
                 "Échec de la réécriture protobuf %s pour %s : %s", pb_path, conv_id, exc
             )
+            try:
+                tmp_path = pb_path.with_name(pb_path.name + ".tmp")
+                if tmp_path.is_file():
+                    tmp_path.unlink()
+            except OSError:
+                pass
 
     # 4. Invalider le cache mémoire
     if conv_id in _CHAT_CACHE:
