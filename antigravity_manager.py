@@ -49,6 +49,10 @@ from config import (
     get_changelog_data,
     get_ui_state,
     save_ui_state,
+    get_archive_frequency,
+    archive_due,
+    set_last_archive_ts,
+    ARCHIVE_FREQUENCIES,
     DEFAULT_PROJECTS_ROOT,
     DEFAULT_ANTIGRAVITY_ROOT,
     DEFAULT_CLAUDE_ROOT,
@@ -641,6 +645,39 @@ class _IndexSyncRunnable(QRunnable):
             search_index.close_thread_connection()
 
 
+class _ArchiveSignals(QObject):
+    finished = _Signal(int, int, str)  # (projets_touchés, convs_recopiées, message)
+
+
+class _ArchiveRunnable(QRunnable):
+    """Archivage incrémental des conversations Antigravity en tâche de fond.
+
+    Copie, dans `<projet>/_archive/`, une sauvegarde légère (brut sans images +
+    export Markdown) de chaque conversation. Seuls les projets ayant au moins
+    une conversation nouvelle ou modifiée sont réécrits. Voir `archive.py`.
+    """
+
+    def __init__(self, convs: list):
+        super().__init__()
+        self.signals = _ArchiveSignals()
+        self._convs = convs
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            import archive
+
+            summary = archive.archive_all(self._convs)
+            touched = sum(1 for s in summary.values() if s.get("updated"))
+            copied = sum(s.get("updated", 0) for s in summary.values())
+            if copied:
+                msg = f"Archivage : {copied} conversation(s) sauvegardée(s) dans {touched} projet(s)."
+            else:
+                msg = "Archivage : rien de nouveau à sauvegarder."
+            self.signals.finished.emit(touched, copied, msg)
+        except Exception as exc:  # pragma: no cover - garde-fou
+            self.signals.finished.emit(0, 0, f"Échec de l'archivage : {exc}")
+
+
 class _ClaudeIndexSyncRunnable(QRunnable):
     """Équivalent de `_IndexSyncRunnable` pour la source Claude Code (v2.5)."""
 
@@ -802,6 +839,36 @@ class SettingsDialog(QDialog):
         idx_row.addWidget(btn_reindex)
         layout.addLayout(idx_row)
 
+        # 5. Archivage automatique des conversations (voir archive.py)
+        layout.addSpacing(6)
+        layout.addWidget(QLabel("Archivage automatique des conversations :"))
+        self.archive_combo = QComboBox()
+        for key, label in ARCHIVE_FREQUENCIES.items():
+            self.archive_combo.addItem(label, key)
+        self.archive_combo.setStyleSheet(input_style)
+        _cur_freq = get_archive_frequency()
+        _idx = self.archive_combo.findData(_cur_freq)
+        self.archive_combo.setCurrentIndex(_idx if _idx >= 0 else 0)
+        layout.addWidget(self.archive_combo)
+
+        arch_help = QLabel(
+            "Une copie de secours (brut sans images + Markdown) est écrite dans "
+            "<projet>\\_archive\\. Seuls les projets modifiés sont réécrits."
+        )
+        arch_help.setWordWrap(True)
+        arch_help.setStyleSheet(
+            "color: #a1a1aa; font-size: 11px;" if is_dark else "color: #64748b; font-size: 11px;"
+        )
+        layout.addWidget(arch_help)
+
+        arch_row = QHBoxLayout()
+        arch_row.addStretch()
+        btn_archive_now = QPushButton("Archiver maintenant")
+        btn_archive_now.setToolTip("Forcer un archivage immédiat de toutes les conversations")
+        btn_archive_now.clicked.connect(self._trigger_archive_now)
+        arch_row.addWidget(btn_archive_now)
+        layout.addLayout(arch_row)
+
         layout.addSpacing(10)
 
         # Boutons
@@ -856,6 +923,8 @@ class SettingsDialog(QDialog):
         self.ag_edit.setText(str(DEFAULT_ANTIGRAVITY_ROOT))
         self.claude_edit.setText(DEFAULT_CLAUDE_ROOT)
         self.theme_combo.setCurrentIndex(0)
+        _i = self.archive_combo.findData("always")
+        self.archive_combo.setCurrentIndex(_i if _i >= 0 else 0)
 
     def _open_changelog(self):
         dlg = ChangelogDialog(self)
@@ -871,12 +940,19 @@ class SettingsDialog(QDialog):
             parent.rebuild_search_index()
             self._idx_status_label.setText("Index de recherche : reconstruction lancée…")
 
+    def _trigger_archive_now(self):
+        """Demande à la fenêtre principale un archivage immédiat."""
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "archive_now"):
+            parent.archive_now()
+
     def _save(self):
         cfg = load_config()
         cfg["projects_root"] = self.proj_edit.text().strip()
         cfg["antigravity_root"] = self.ag_edit.text().strip()
         cfg["claude_root"] = self.claude_edit.text().strip() or DEFAULT_CLAUDE_ROOT
         cfg["theme"] = self.theme_combo.currentData()
+        cfg["archive_frequency"] = self.archive_combo.currentData()
         save_config(cfg)
         self.accept()
         if self.on_save_callback:
@@ -1166,6 +1242,11 @@ class AntigravityManagerWindow(QMainWindow):
         # jamais mélangé avec _index_ready (Antigravity).
         self._claude_index_ready = False
         self._claude_index_syncing = False
+        # Archivage incrémental des conversations (archive.py) : un seul en vol,
+        # sur un pool DÉDIÉ (1 thread) pour ne jamais retarder recherche/index.
+        self._archiving = False
+        self._archive_pool = QThreadPool()
+        self._archive_pool.setMaxThreadCount(1)
         # Références fortes aux runnables en vol (sinon leurs QObject de signaux
         # peuvent être collectés avant l'émission -> RuntimeError).
         self._active_runnables: set = set()
@@ -1657,10 +1738,66 @@ class AntigravityManagerWindow(QMainWindow):
     # -----------------------------------------------------------------
     # Index plein-texte : synchronisation & santé
     # -----------------------------------------------------------------
+    def _kick_off_archive(self):
+        """Archivage incrémental des conversations (tâche de fond).
+
+        Déclenché au lancement et avant toute synchro d'index : garantit qu'une
+        copie de secours existe dans `<projet>/_archive/` AVANT toute opération
+        susceptible de faire disparaître une conversation (réindexation, purge…).
+
+        Utilise un pool DÉDIÉ (un seul thread) : l'archivage peut être long et ne
+        doit jamais retarder les tâches du pool global (recherche, indexation).
+        Désactivable via `ANTIGRAVITY_MANAGER_NO_ARCHIVE=1` (tests).
+        """
+        if os.environ.get("ANTIGRAVITY_MANAGER_NO_ARCHIVE") == "1":
+            return
+        if not archive_due():
+            return
+        if getattr(self, "_archiving", False) or not self.all_convs:
+            return
+        self._archiving = True
+        runnable = _ArchiveRunnable(list(self.all_convs))
+        self._active_runnables.add(runnable)
+        runnable.signals.finished.connect(self._on_archive_finished)
+        runnable.signals.finished.connect(lambda *_: self._active_runnables.discard(runnable))
+        self._archive_pool.start(runnable)
+
+    def _on_archive_finished(self, _touched: int, copied: int, message: str):
+        self._archiving = False
+        # Mémoriser l'horodatage : les modes throttlés (quotidien/hebdo) s'en
+        # servent pour ne pas ré-archiver trop souvent.
+        try:
+            import time as _time
+            set_last_archive_ts(_time.time())
+        except Exception:
+            pass
+        if self._shutting_down:
+            return
+        if copied:
+            self.status_bar.showMessage(f"🗄️ {message}", 5000)
+
+    def archive_now(self):
+        """Action utilisateur : forcer un archivage immédiat (ignore la récurrence)."""
+        if getattr(self, "_archiving", False):
+            self.status_bar.showMessage("Archivage déjà en cours…", 3000)
+            return
+        if not self.all_convs:
+            self.status_bar.showMessage("Aucune conversation à archiver.", 3000)
+            return
+        self._archiving = True
+        self.status_bar.showMessage("🗄️ Archivage des conversations…", 4000)
+        runnable = _ArchiveRunnable(list(self.all_convs))
+        self._active_runnables.add(runnable)
+        runnable.signals.finished.connect(self._on_archive_finished)
+        runnable.signals.finished.connect(lambda *_: self._active_runnables.discard(runnable))
+        self._archive_pool.start(runnable)
+
     def _kick_off_index_sync(self, rebuild: bool = False):
         """Lance (en tâche de fond) la synchro de l'index de recherche."""
         if self._index_syncing or not self.all_convs:
             return
+        # Toujours archiver AVANT de (re)synchroniser l'index.
+        self._kick_off_archive()
         status = search_index.check_status()
         if status.corrupt and not rebuild:
             self.status_bar.showMessage(

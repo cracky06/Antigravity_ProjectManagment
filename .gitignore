@@ -28,6 +28,12 @@ claude_search_index.db*
 # Exports Markdown de conversations (générés par la fonctionnalité Export)
 _conversations/
 
+# Archives automatiques des conversations (archive.py) — copies de secours
+_archive/
+
+# Répertoire de travail temporaire (diagnostics, dumps ad hoc)
+temp/
+
 # Coordination multi-agents locale (mcp-multi-ai) : état de session, pas du code
 .mcp-multi-ai/
 agents.config.json

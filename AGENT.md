@@ -21,6 +21,7 @@ Ce document définit les directives d'architecture, les spécifications techniqu
 Antigravity_ProjectManagment/
 ├── antigravity_manager.py   # Interface GUI principale (PyQt6, panneau dépliable, viewer de chat, recherche async)
 ├── data_loader.py           # Moteur de données (parsing protobuf wire-format, extraction transcripts & artefacts)
+├── archive.py               # Archivage incrémental des conversations dans <projet>/_archive/ (anti-disparition)
 ├── search_index.py          # Index de recherche plein-texte SQLite FTS5 (search_index.db, gitignoré)
 ├── config.py                # Persistance de configuration (config.json, gestion sys.frozen)
 ├── run.bat                  # Lanceur direct sous Windows (auto-détection .venv)
@@ -57,6 +58,13 @@ Antigravity_ProjectManagment/
 ### 📝 Fallback sur Artefacts
 
 * Lorsque `transcript.jsonl` ou `transcript_full.jsonl` est absent (sessions techniques, sous-agents, logs nettoyés), `load_chat_messages()` lit et formate les artefacts disponibles (`walkthrough.md`, `task.md`, `implementation_plan.md`).
+
+### 🗄️ Archivage incrémental (`archive.py`)
+
+* Déclenché par `AntigravityManagerWindow._kick_off_archive()` au lancement et avant toute synchro d'index. Tourne sur un **pool dédié à 1 thread** (`self._archive_pool`), jamais le `QThreadPool` global, pour ne pas retarder recherche/indexation.
+* Récurrence pilotée par `config.archive_frequency` (`always` / `launch` / `daily` / `weekly` / `manual`) ; `config.archive_due()` tranche. Réglable dans les Paramètres + bouton « Archiver maintenant ». Env `ANTIGRAVITY_MANAGER_NO_ARCHIVE=1` désactive tout (utilisé par `conftest.py`).
+* Cible : `<projects_root>/<projet>/_archive/` (bucket `_ANTIGRAVITY_HORS_PROJET` pour les conversations sans projet). Contenu : `store/<conv_id>/` en clair (brut `.db`/`.pb` + sidecars `-wal`/`-shm`, `brain/**` **hors images**, `<conv_id>.md` sans copie d'images) + `conversations.zip` régénéré (`.tmp` + `os.replace`).
+* **Incrémental via `manifest.json`** `{conv_id: {rel: [mtime_ns, size]}}` : une conv n'est recopiée que si une signature change. **Jamais de suppression** : une conv absente des sources mais déjà archivée est laissée intacte.
 
 ### 📦 Mode Compilé PyInstaller (`config.py`)
 

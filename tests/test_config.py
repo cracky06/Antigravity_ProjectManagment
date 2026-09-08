@@ -163,3 +163,59 @@ def test_version_and_changelog(tmp_path, monkeypatch):
     assert "✨ Nouvelles fonctionnalités (feat)" in ch["v1.0"]
 
 
+# ---------------------------------------------------------------------------
+# Archivage automatique (récurrence paramétrable)
+# ---------------------------------------------------------------------------
+def test_archive_frequency_default_and_roundtrip(tmp_path, monkeypatch):
+    from config import (
+        get_archive_frequency,
+        set_archive_frequency,
+        get_archive_enabled,
+        DEFAULT_ARCHIVE_FREQUENCY,
+    )
+
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+
+    assert get_archive_frequency() == DEFAULT_ARCHIVE_FREQUENCY == "always"
+    assert get_archive_enabled() is True
+
+    set_archive_frequency("weekly")
+    assert get_archive_frequency() == "weekly"
+
+    # Valeur inconnue -> retombe sur le défaut.
+    set_archive_frequency("n_importe_quoi")
+    assert get_archive_frequency() == "always"
+
+    set_archive_frequency("manual")
+    assert get_archive_enabled() is False
+
+
+def test_archive_due_respects_frequency_and_interval(tmp_path, monkeypatch):
+    from config import set_archive_frequency, set_last_archive_ts, archive_due
+
+    monkeypatch.setattr("config.CONFIG_FILE", tmp_path / "config.json")
+
+    now = 1_000_000.0
+
+    set_archive_frequency("manual")
+    assert archive_due(now) is False
+
+    set_archive_frequency("always")
+    assert archive_due(now) is True
+
+    set_archive_frequency("launch")
+    assert archive_due(now) is True
+
+    set_archive_frequency("daily")
+    set_last_archive_ts(now - 3600)          # il y a 1 h
+    assert archive_due(now) is False
+    set_last_archive_ts(now - 90_000)        # il y a > 24 h
+    assert archive_due(now) is True
+
+    set_archive_frequency("weekly")
+    set_last_archive_ts(now - 3 * 86_400)    # il y a 3 j
+    assert archive_due(now) is False
+    set_last_archive_ts(now - 8 * 86_400)    # il y a 8 j
+    assert archive_due(now) is True
+
+

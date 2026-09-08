@@ -11,6 +11,11 @@ import os
 import pytest
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+# L'archivage automatique (archive.py) parcourt le vrai `.gemini/` et écrit sur
+# disque : à désactiver dans toute la suite pour ne pas polluer ni ralentir les
+# tests d'interface. Les tests dédiés (test_archive.py) appellent archive_all()
+# directement, sans passer par ce garde-fou.
+os.environ["ANTIGRAVITY_MANAGER_NO_ARCHIVE"] = "1"
 
 
 @pytest.fixture(scope="session")

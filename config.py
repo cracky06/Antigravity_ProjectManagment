@@ -114,6 +114,75 @@ def get_claude_root() -> Path:
     return Path(os.path.expandvars(raw))
 
 
+# ---------------------------------------------------------------------------
+# Archivage automatique des conversations (voir archive.py)
+# ---------------------------------------------------------------------------
+#: modes de récurrence acceptés -> libellé affiché dans les Paramètres
+ARCHIVE_FREQUENCIES = {
+    "always": "À chaque lancement et avant chaque réindexation",
+    "launch": "Au lancement de l'application uniquement",
+    "daily": "Une fois par jour maximum",
+    "weekly": "Une fois par semaine maximum",
+    "manual": "Jamais automatiquement (bouton « Archiver » uniquement)",
+}
+DEFAULT_ARCHIVE_FREQUENCY = "always"
+
+#: secondes correspondant aux modes throttlés
+_ARCHIVE_MIN_INTERVAL = {"daily": 86_400, "weekly": 604_800}
+
+
+def get_archive_frequency() -> str:
+    """Récurrence de l'archivage : une clé de `ARCHIVE_FREQUENCIES`."""
+    cfg = load_config()
+    val = str(cfg.get("archive_frequency", DEFAULT_ARCHIVE_FREQUENCY)).lower()
+    return val if val in ARCHIVE_FREQUENCIES else DEFAULT_ARCHIVE_FREQUENCY
+
+
+def set_archive_frequency(value: str) -> None:
+    cfg = load_config()
+    cfg["archive_frequency"] = value if value in ARCHIVE_FREQUENCIES else DEFAULT_ARCHIVE_FREQUENCY
+    save_config(cfg)
+
+
+def get_archive_enabled() -> bool:
+    """Vrai si l'archivage automatique doit tourner (mode ≠ 'manual')."""
+    return get_archive_frequency() != "manual"
+
+
+def get_last_archive_ts() -> float:
+    """Horodatage (epoch) du dernier archivage réussi, 0.0 si jamais."""
+    cfg = load_config()
+    try:
+        return float(cfg.get("last_archive_ts", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def set_last_archive_ts(ts: float) -> None:
+    cfg = load_config()
+    cfg["last_archive_ts"] = float(ts)
+    save_config(cfg)
+
+
+def archive_due(now: float | None = None) -> bool:
+    """Décide si un archivage automatique doit avoir lieu maintenant.
+
+    - 'manual'            -> jamais
+    - 'always' / 'launch' -> oui (le déclencheur choisit QUAND appeler)
+    - 'daily' / 'weekly'  -> seulement si l'intervalle est écoulé
+    """
+    import time as _time
+
+    freq = get_archive_frequency()
+    if freq == "manual":
+        return False
+    if freq in ("always", "launch"):
+        return True
+    min_interval = _ARCHIVE_MIN_INTERVAL.get(freq, 0)
+    now = _time.time() if now is None else now
+    return (now - get_last_archive_ts()) >= min_interval
+
+
 def detect_system_theme() -> str:
     """Détecte le thème du système d'exploitation Windows ('dark' ou 'light')."""
     if sys.platform == "win32":

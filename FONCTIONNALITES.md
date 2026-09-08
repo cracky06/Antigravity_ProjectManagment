@@ -112,6 +112,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - **Fenêtre de paramètres** ⚙️ : dossiers sources, thème *(v1.0)*
 - Détection dynamique des dossiers par défaut (`E:\Dev`, `D:\DEV`… ; `.gemini/antigravity-ide` puis `.gemini/antigravity`) *(v1.0)*
 - Champ **« Dossier Claude Code »** configurable (défaut `%USERPROFILE%\.claude\projects`) pour les installations non standard *(v2.5)*
+- **Récurrence de l'archivage automatique** paramétrable : à chaque lancement + réindexation (défaut), au lancement seulement, une fois par jour, une fois par semaine, ou jamais ; plus un bouton **« Archiver maintenant »** *(v2.7)*
 - **Fenêtre de changelog** modeless automatique lors d'une nouvelle version *(v1.0)*
 - **Fenêtre « À propos »** (bouton dans les Paramètres) : illustration, version, lien GitHub *(v2.3)*
 - **Icône officielle** de l'application (barre latérale, barre de titre, barre des tâches Windows via AppUserModelID) *(v1.0)*
@@ -131,6 +132,8 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 
 - Lecture résiliente en cas de fichier log ou metadata absent/corrompu *(v1.0)*
 - Découverte multi-dossiers `.gemini` (antigravity-ide / antigravity / antigravity-backup) *(v1.0)*
+- **Archivage automatique et incrémental des conversations** : au lancement et avant chaque (ré)indexation, une copie de secours de chaque conversation est écrite dans `<projet>/_archive/` — dossier `store/<conv_id>/` en clair (brut `.db`/`.pb` **sans les images** + export Markdown) et `conversations.zip` régénéré. Seuls les projets ayant une conversation **nouvelle ou modifiée** (comparaison mtime + taille) sont réécrits ; une conversation archivée **n'est jamais supprimée**, même si Antigravity ne la connaît plus. Anticipe toute disparition (réinitialisation de l'index, purge, corruption) *(v2.7)*
+- **Réécriture de `agyhub_summaries_proto.pb` sécurisée** (déplacement de conversation) : le fichier reconstruit est relu et **rejeté s'il a perdu des entrées** (l'index officiel reste intact), écriture atomique `.tmp` + `os.replace` pour qu'un crash ne laisse jamais un index tronqué *(v2.7)*
 - **Conversations récentes de l'Antigravity IDE** (stockées en base SQLite `conversations/*.db`, sans dossier `brain/`) désormais lues : titre, date, projet et dialogue complet — au lieu d'une entrée vide *(v2.6)*
 - **Conversations Antigravity au format hérité** (fichier `.pb` opaque, avril/mai 2026) : dialogue complet reconstruit à la volée via le moteur local d'Antigravity s'il est ouvert, sinon aperçu partiel depuis les résumés de session ; bandeau discret signalant la reconstruction *(v2.6)*
 - Fix lecture du fichier `VERSION` en mode `--onefile` PyInstaller *(v1.2)*
