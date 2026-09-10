@@ -22,6 +22,7 @@ Antigravity_ProjectManagment/
 ├── antigravity_manager.py   # Interface GUI principale (PyQt6, panneau dépliable, viewer de chat, recherche async)
 ├── data_loader.py           # Moteur de données (parsing protobuf wire-format, extraction transcripts & artefacts)
 ├── archive.py               # Archivage incrémental des conversations dans <projet>/_archive/ (anti-disparition)
+├── live_watch.py            # Résolution des fichiers à surveiller pour le suivi « live » d'une discussion ouverte
 ├── search_index.py          # Index de recherche plein-texte SQLite FTS5 (search_index.db, gitignoré)
 ├── config.py                # Persistance de configuration (config.json, gestion sys.frozen)
 ├── run.bat                  # Lanceur direct sous Windows (auto-détection .venv)
@@ -65,6 +66,12 @@ Antigravity_ProjectManagment/
 * Récurrence pilotée par `config.archive_frequency` (`always` / `launch` / `daily` / `weekly` / `manual`) ; `config.archive_due()` tranche. Réglable dans les Paramètres + bouton « Archiver maintenant ». Env `ANTIGRAVITY_MANAGER_NO_ARCHIVE=1` désactive tout (utilisé par `conftest.py`).
 * Cible : `<projects_root>/<projet>/_archive/` (bucket `_ANTIGRAVITY_HORS_PROJET` pour les conversations sans projet). Contenu : `store/<conv_id>/` en clair (brut `.db`/`.pb` + sidecars `-wal`/`-shm`, `brain/**` **hors images**, `<conv_id>.md` sans copie d'images) + `conversations.zip` régénéré (`.tmp` + `os.replace`).
 * **Incrémental via `manifest.json`** `{conv_id: {rel: [mtime_ns, size]}}` : une conv n'est recopiée que si une signature change. **Jamais de suppression** : une conv absente des sources mais déjà archivée est laissée intacte.
+
+### 🔴 Suivi « live » d'une discussion (`live_watch.py`)
+
+* Boutons d'en-tête de la vue chat : `btn_refresh_chat` (🔄, re-rendu ponctuel) et `btn_live_follow` (🔴, checkable). `live_watch.antigravity_watch_paths()` / `claude_watch_paths()` renvoient les fichiers dont le mtime signale du nouveau contenu (transcripts, `.db` + `-wal`, à défaut le dossier `logs/`).
+* `_on_live_follow_toggled()` arme un `QFileSystemWatcher` **plus** un `QTimer` de repli (3 s) — le watcher rate des appends rapides et le remplacement de fichier (WAL SQLite). `_live_poll_check()` compare une signature `(path, mtime_ns, size)` et n'appelle `_rerender_current_chat()` que si elle a changé.
+* `load_chat_messages` / `load_claude_messages` étant indexés sur le mtime, un simple ré-appel de `display_chat` relit le disque. Le scroll est préservé, recollé en bas si on y était (tail). Le suivi se coupe au changement de conversation (`_reset_live_follow_ui()`), sur `_clear_chat()` et dans `closeEvent()`.
 
 ### 📦 Mode Compilé PyInstaller (`config.py`)
 

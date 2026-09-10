@@ -40,6 +40,8 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Gestion des **sessions de sous-agents** : affichage des artéfacts et résumé des actions *(v1.0)*
 - **Vue compactée** : moins d'espace sous « Utilisateur »/« Antigravity », entre messages et paragraphes *(v1.9)*
 - Curseur remis en haut sans sélection à l'ouverture d'une discussion *(v1.9)*
+- **Rafraîchir cette discussion** (bouton 🔄) : relit le transcript sur le disque sans recharger l'arbre ni relancer l'indexation *(v2.7)*
+- **Suivi « live »** (bouton 🔴 Suivre) : réaffiche la discussion à chaque nouvelle ligne écrite sur le disque (`QFileSystemWatcher` + repli 3 s). Pensé pour observer en direct une conversation pilotée par un orchestrateur (Claude Orchestrator, Antigravity + watcher, mode Multi-IA) dont les échanges n'apparaissent pas au fil de l'eau dans le chat du client. Auto-scroll en bas si on y était ; se coupe au changement de discussion. Fonctionne sur les deux sources *(v2.7)*
 
 ### Liens dans la discussion
 

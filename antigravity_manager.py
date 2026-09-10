@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QObject, QRunnable, QThreadPool, QByteArray, pyqtSignal as _Signal
+from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QObject, QRunnable, QThreadPool, QByteArray, QFileSystemWatcher, pyqtSignal as _Signal
 from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut, QTextCursor, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -88,6 +88,7 @@ from claude_code_loader import (
     export_claude_conversation_to_path,
     export_claude_project_conversations,
 )
+from live_watch import antigravity_watch_paths, claude_watch_paths
 
 try:
     import markdown
@@ -141,6 +142,11 @@ QPushButton.toolBtn:hover {
     background-color: #27272a;
     color: #ffffff;
     border-color: #52525b;
+}
+QPushButton.toolBtn:checked {
+    background-color: #7f1d1d;
+    color: #fecaca;
+    border-color: #b91c1c;
 }
 
 /* TreeWidget */
@@ -318,6 +324,11 @@ QPushButton.toolBtn:hover {
     background-color: #f8fafc;
     color: #0f172a;
     border-color: #94a3b8;
+}
+QPushButton.toolBtn:checked {
+    background-color: #fee2e2;
+    color: #991b1b;
+    border-color: #ef4444;
 }
 
 /* TreeWidget */
@@ -1247,6 +1258,15 @@ class AntigravityManagerWindow(QMainWindow):
         self._archiving = False
         self._archive_pool = QThreadPool()
         self._archive_pool.setMaxThreadCount(1)
+
+        # Suivi « live » de la discussion ouverte (bouton 🔴 Suivre) : watcher de
+        # fichiers + timer de repli (QFileSystemWatcher rate certains appends
+        # rapides et le remplacement de fichier — WAL SQLite).
+        self._live_watcher: QFileSystemWatcher | None = None
+        self._live_timer = QTimer(self)
+        self._live_timer.setInterval(3000)
+        self._live_timer.timeout.connect(self._live_poll_check)
+        self._live_sig: tuple | None = None   # signature (mtime,size) des fichiers suivis
         # Références fortes aux runnables en vol (sinon leurs QObject de signaux
         # peuvent être collectés avant l'émission -> RuntimeError).
         self._active_runnables: set = set()
@@ -1270,6 +1290,7 @@ class AntigravityManagerWindow(QMainWindow):
         self._persist_ui_state()
         self._shutting_down = True
         self._search_generation += 1  # invalide toute recherche en vol
+        self._teardown_live_follow()
         try:
             self._thread_pool.waitForDone(3000)
         except Exception:
@@ -1472,6 +1493,28 @@ class AntigravityManagerWindow(QMainWindow):
         self.btn_find_toggle.clicked.connect(self._toggle_find_bar)
         self.btn_find_toggle.setVisible(False)
         header_top_row.addWidget(self.btn_find_toggle)
+
+        # Rafraîchir uniquement la discussion ouverte (sans recharger l'arbre).
+        self.btn_refresh_chat = QPushButton("🔄")
+        self.btn_refresh_chat.setProperty("class", "toolBtn")
+        self.btn_refresh_chat.setToolTip("Rafraîchir cette discussion (relire le transcript sur le disque)")
+        self.btn_refresh_chat.setFixedWidth(32)
+        self.btn_refresh_chat.clicked.connect(self._refresh_current_chat)
+        self.btn_refresh_chat.setVisible(False)
+        header_top_row.addWidget(self.btn_refresh_chat)
+
+        # Suivi « live » : réaffiche la discussion dès qu'un de ses fichiers
+        # change (orchestrateur, mode Multi-IA…). Voir live_watch.py.
+        self.btn_live_follow = QPushButton("🔴 Suivre")
+        self.btn_live_follow.setProperty("class", "toolBtn")
+        self.btn_live_follow.setCheckable(True)
+        self.btn_live_follow.setToolTip(
+            "Suivre cette discussion en direct : rafraîchissement automatique "
+            "à chaque nouvelle ligne écrite sur le disque"
+        )
+        self.btn_live_follow.toggled.connect(self._on_live_follow_toggled)
+        self.btn_live_follow.setVisible(False)
+        header_top_row.addWidget(self.btn_live_follow)
 
         self.btn_open_folder = QPushButton("📂 Ouvrir le dossier")
         self.btn_open_folder.setProperty("class", "toolBtn")
@@ -2233,6 +2276,10 @@ class AntigravityManagerWindow(QMainWindow):
         self.btn_back.setToolTip("Revenir à la conversation précédente")
         self.btn_back.setVisible(bool(self._nav_history))
 
+        # Changer de conversation coupe le suivi live de la précédente.
+        if self.selected_conv is None or self.selected_conv.conv_id != info.conv_id:
+            self._reset_live_follow_ui()
+
         self.selected_conv = info
         title_text = info.title if info.title else "Conversation sans titre"
         self.chat_title.setText(title_text)
@@ -2243,6 +2290,8 @@ class AntigravityManagerWindow(QMainWindow):
         self.btn_open_folder.setVisible(True)
         self.btn_toggle_raw.setVisible(True)
         self.btn_find_toggle.setVisible(True)
+        self.btn_refresh_chat.setVisible(True)
+        self.btn_live_follow.setVisible(True)
 
         # Indexation au fil de l'eau : garde l'index de recherche frais pour
         # cette conversation sans attendre la synchro groupée.
@@ -2540,6 +2589,9 @@ class AntigravityManagerWindow(QMainWindow):
         dans claude_code_loader.py. L'indexation FTS (v2.5) est au fil de
         l'eau comme côté Antigravity : `_ClaudeTouchIndexRunnable`.
         """
+        if self.selected_claude_conv is None or self.selected_claude_conv.conv_id != conv.conv_id:
+            self._reset_live_follow_ui()
+
         self.selected_claude_conv = conv
         self.chat_title.setText(conv.title or "Conversation sans titre")
         date_str = conv.last_dt.strftime("%d/%m/%Y à %H:%M") if conv.last_dt else "Date inconnue"
@@ -2548,6 +2600,8 @@ class AntigravityManagerWindow(QMainWindow):
         self.btn_open_folder.setVisible(False)
         self.btn_toggle_raw.setVisible(False)
         self.btn_find_toggle.setVisible(True)
+        self.btn_refresh_chat.setVisible(True)
+        self.btn_live_follow.setVisible(True)
 
         if not self._shutting_down and self._claude_index_ready and not self._claude_index_syncing:
             r = _ClaudeTouchIndexRunnable(conv)
@@ -2667,13 +2721,24 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_browser.setTextCursor(cur)
         self.chat_browser.verticalScrollBar().setValue(0)
 
+    def _reset_live_follow_ui(self):
+        """Coupe le suivi live et remet le bouton à l'état inactif (sans bruit)."""
+        self._teardown_live_follow()
+        if self.btn_live_follow.isChecked():
+            self.btn_live_follow.blockSignals(True)
+            self.btn_live_follow.setChecked(False)
+            self.btn_live_follow.blockSignals(False)
+
     def _clear_chat(self):
+        self._reset_live_follow_ui()
         self.selected_conv = None
         self.chat_title.setText("Sélectionnez une conversation")
         self.chat_meta.setText("Choisissez un projet ou une conversation dans la barre latérale.")
         self.btn_open_folder.setVisible(False)
         self.btn_toggle_raw.setVisible(False)
         self.btn_find_toggle.setVisible(False)
+        self.btn_refresh_chat.setVisible(False)
+        self.btn_live_follow.setVisible(False)
         self.chat_browser.setHtml("")
         self.find_bar.setVisible(False)
         self.find_result_label.setText("")
@@ -2691,6 +2756,126 @@ class AntigravityManagerWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(brain_p)))
         else:
             QMessageBox.information(self, "Dossier introuvable", "Le dossier de cette session n'a pas été trouvé sur le disque.")
+
+    # -----------------------------------------------------------------
+    # Rafraîchissement ciblé & suivi « live » d'une discussion
+    # -----------------------------------------------------------------
+    def _rerender_current_chat(self, *, keep_scroll: bool = True):
+        """Réaffiche la discussion actuellement ouverte (Antigravity ou Claude).
+
+        `load_chat_messages` / `load_claude_messages` sont indexés sur le mtime
+        du fichier : un simple ré-appel relit le disque si le contenu a changé.
+        On préserve la position de scroll ; si l'utilisateur était en bas, on
+        recolle en bas (comportement « tail »).
+        """
+        sb = self.chat_browser.verticalScrollBar()
+        was_at_bottom = sb.value() >= sb.maximum() - 4
+        old_value = sb.value()
+
+        if self._active_source == "claude_code" and self.selected_claude_conv is not None:
+            self.display_claude_chat(self.selected_claude_conv)
+        elif self.selected_conv is not None:
+            # record_history=False : un rafraîchissement n'est pas une navigation.
+            self.display_chat(self.selected_conv, record_history=False)
+        else:
+            return
+
+        if keep_scroll:
+            if was_at_bottom:
+                sb.setValue(sb.maximum())
+            else:
+                sb.setValue(min(old_value, sb.maximum()))
+
+    def _refresh_current_chat(self):
+        """Action bouton 🔄 : rafraîchit la discussion ouverte."""
+        if self.selected_conv is None and self.selected_claude_conv is None:
+            return
+        self._rerender_current_chat(keep_scroll=True)
+        self.status_bar.showMessage("Discussion rafraîchie.", 2000)
+
+    def _current_watch_paths(self) -> list:
+        """Chemins à surveiller pour la discussion ouverte (selon la source)."""
+        if self._active_source == "claude_code" and self.selected_claude_conv is not None:
+            return claude_watch_paths(self.selected_claude_conv.path)
+        if self.selected_conv is not None:
+            return antigravity_watch_paths(self.selected_conv.conv_id)
+        return []
+
+    @staticmethod
+    def _paths_signature(paths) -> tuple:
+        sig = []
+        for p in paths:
+            try:
+                st = p.stat()
+                sig.append((str(p), st.st_mtime_ns, st.st_size))
+            except OSError:
+                sig.append((str(p), 0, 0))
+        return tuple(sig)
+
+    def _teardown_live_follow(self):
+        """Désarme le suivi live (watcher + timer), sans toucher au bouton."""
+        self._live_timer.stop()
+        if self._live_watcher is not None:
+            try:
+                self._live_watcher.fileChanged.disconnect()
+                self._live_watcher.directoryChanged.disconnect()
+            except TypeError:
+                pass
+            self._live_watcher.deleteLater()
+            self._live_watcher = None
+        self._live_sig = None
+
+    def _on_live_follow_toggled(self, checked: bool):
+        self._teardown_live_follow()
+        if not checked:
+            self.status_bar.showMessage("Suivi live désactivé.", 2000)
+            return
+
+        paths = self._current_watch_paths()
+        if not paths:
+            self.btn_live_follow.blockSignals(True)
+            self.btn_live_follow.setChecked(False)
+            self.btn_live_follow.blockSignals(False)
+            self.status_bar.showMessage(
+                "Aucun fichier surveillable pour cette discussion (session legacy ?).", 4000
+            )
+            return
+
+        self._live_watcher = QFileSystemWatcher(self)
+        watch_str = [str(p) for p in paths]
+        self._live_watcher.addPaths(watch_str)
+        self._live_watcher.fileChanged.connect(self._on_live_fs_event)
+        self._live_watcher.directoryChanged.connect(self._on_live_fs_event)
+        self._live_sig = self._paths_signature(paths)
+        self._live_timer.start()  # repli : QFileSystemWatcher rate des appends
+        self.status_bar.showMessage(
+            f"🔴 Suivi live actif ({len(paths)} fichier(s) surveillé(s)).", 3000
+        )
+
+    def _on_live_fs_event(self, _path: str):
+        # Un fichier remplacé (WAL/rename) peut être retiré du watcher : on le
+        # ré-ajoute et on laisse le contrôle de signature décider du rendu.
+        if self._live_watcher is not None:
+            watched = set(self._live_watcher.files()) | set(self._live_watcher.directories())
+            missing = [str(p) for p in self._current_watch_paths() if str(p) not in watched]
+            if missing:
+                self._live_watcher.addPaths(missing)
+        self._live_poll_check()
+
+    def _live_poll_check(self):
+        """Compare la signature disque des fichiers suivis ; réaffiche si changée."""
+        if not self.btn_live_follow.isChecked() or self._shutting_down:
+            return
+        # Ne pas arracher l'utilisateur d'un aperçu de fichier : on note quand
+        # même la nouvelle signature pour rafraîchir au retour.
+        paths = self._current_watch_paths()
+        sig = self._paths_signature(paths)
+        if sig == self._live_sig:
+            return
+        self._live_sig = sig
+        if self._file_view_active:
+            return
+        self._rerender_current_chat(keep_scroll=True)
 
     # -----------------------------------------------------------------
     # Navigation : liens externes & bouton retour
