@@ -252,6 +252,27 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.8": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Section « ⏳ EXPIRENT BIENTÔT » (source Claude Code) : toujours en tête de l'arbre, même en vue projet filtré, liste les conversations que Claude Code supprimera dans moins de 7 jours — délai calculé sur la vraie valeur de cleanupPeriodDays (~/.claude/settings.json), pas le défaut. Compte à rebours affiché sur chaque entrée",
+                "Ces conversations expirantes sont surlignées en rouge partout où elles apparaissent dans l'arbre, avec une infobulle donnant le nombre de jours restants ; le même avertissement apparaît dans l'en-tête de la vue discussion une fois ouverte",
+                "Le bandeau de rappel sous l'arbre Claude Code affiche désormais le délai réellement configuré au lieu du défaut 30 jours codé en dur",
+            ],
+            "🐛 Corrections (fix)": [
+                "La fenêtre « Quoi de neuf ? » marquait CHAQUE version listée comme « (Actuelle) » au lieu de la seule version installée — mention retirée",
+            ],
+        },
+        "v2.7": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Archivage automatique et incrémental des conversations : au lancement et avant chaque (ré)indexation, une copie de secours de chaque conversation modifiée est écrite dans <projet>/_archive/ (brut sans images + export Markdown, régénéré en .zip). Seuls les projets ayant une conversation nouvelle ou modifiée sont réécrits ; une conversation archivée n'est jamais supprimée, même si Antigravity ne la connaît plus",
+                "Récurrence de l'archivage paramétrable dans les Paramètres (à chaque lancement/réindexation, au lancement seulement, quotidien, hebdomadaire, ou jamais), plus un bouton « Archiver maintenant »",
+                "Bouton 🔄 dans la vue discussion : rafraîchit uniquement la conversation ouverte (relit le transcript sur le disque) sans recharger tout l'arbre ni relancer l'indexation",
+                "Bouton 🔴 Suivre : suit une discussion en direct, avec réaffichage automatique dès qu'une nouvelle ligne est écrite sur le disque — utile pour observer en direct une conversation pilotée par un orchestrateur (Claude Orchestrator, Antigravity + watcher, mode Multi-IA) dont les échanges n'apparaissent pas au fil de l'eau dans le chat du client",
+            ],
+            "🐛 Corrections (fix)": [
+                "Un déplacement de conversation entre projets pouvait, dans de rares cas, réinitialiser l'index interne d'Antigravity (agyhub_summaries_proto.pb) et faire disparaître toutes les conversations de la liste. La réécriture de cet index est désormais validée avant d'être appliquée (annulée si des entrées seraient perdues) et se fait de façon atomique",
+            ],
+        },
         "v2.6": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Les conversations Antigravity portent un badge d'origine dans la barre latérale : [App] (application Antigravity) ou [IDE] (Antigravity IDE), avec le logo Antigravity en icône (fond blanc / fond noir) pour les distinguer d'un coup d'œil",

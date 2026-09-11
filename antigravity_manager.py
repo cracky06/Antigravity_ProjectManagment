@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -89,6 +90,7 @@ from claude_code_loader import (
     export_claude_project_conversations,
 )
 from live_watch import antigravity_watch_paths, claude_watch_paths
+from claude_retention import get_retention_days, is_near_expiry, days_until_purge
 
 try:
     import markdown
@@ -1068,7 +1070,7 @@ class ChangelogDialog(QDialog):
         item_color = QColor("#f4f4f5" if is_dark else "#0f172a")
 
         for ver, cats in changelog.items():
-            ver_item = QTreeWidgetItem([f"📦 Version {ver} (Actuelle)"])
+            ver_item = QTreeWidgetItem([f"📦 Version {ver}"])
             ver_item.setForeground(0, tag_color)
             f = ver_item.font(0)
             f.setBold(True)
@@ -1934,6 +1936,21 @@ class AntigravityManagerWindow(QMainWindow):
         # RÉCENTES) quand le filtre est sur « Tous les projets », ou vue
         # projet unique quand un projet précis est sélectionné.
         if self._active_source == "claude_code":
+            # Purge automatique de Claude Code (cleanupPeriodDays, défaut 30 j,
+            # sans notification) : conversations à moins de WARNING_MARGIN_DAYS
+            # jours de disparaître -> mises en évidence (rouge) partout dans
+            # l'arbre + section dédiée en tête. Calculé une fois pour tout
+            # l'arbre (même horodatage `now` pour la cohérence de l'affichage).
+            retention_days = get_retention_days()
+            expiry_color = QColor("#f87171" if is_dark else "#dc2626")
+            now = datetime.now()
+
+            def _conv_days_left(c_info):
+                return days_until_purge(c_info.last_dt, retention_days, now=now)
+
+            def _conv_is_expiring(c_info) -> bool:
+                return is_near_expiry(c_info.last_dt, retention_days, now=now)
+
             def _add_claude_project_item(proj_name: str, convs) -> QTreeWidgetItem:
                 # NB : ne PAS appeler setExpanded ici — Qt l'ignore sur un item
                 # pas encore rattaché à l'arbre. L'appelant le fait APRÈS
@@ -1945,7 +1962,7 @@ class AntigravityManagerWindow(QMainWindow):
                     _add_claude_conv_child(p_item, c_info)
                 return p_item
 
-            def _add_claude_conv_child(parent: QTreeWidgetItem, c_info, *, badge: bool = False):
+            def _add_claude_conv_child(parent: QTreeWidgetItem, c_info, *, badge: bool = False, show_countdown: bool = False):
                 label = c_info.title or c_info.conv_id[:12]
                 max_len = 34 if badge else 40
                 if len(label) > max_len:
@@ -1954,10 +1971,51 @@ class AntigravityManagerWindow(QMainWindow):
                 origin = f"  •  [{c_info.origin_label}]" if c_info.origin_label and not badge else ""
                 date_str = c_info.last_dt.strftime("%d/%m %H:%M") if c_info.last_dt else ""
                 time_suffix = f"   {date_str}" if date_str else ""
-                c_item = QTreeWidgetItem([f"💬  {label}{badge_txt}{origin}{time_suffix}"])
+
+                expiring = _conv_is_expiring(c_info)
+                countdown_txt = ""
+                if show_countdown:
+                    days_left = _conv_days_left(c_info)
+                    if days_left is not None:
+                        countdown_txt = (
+                            f"  ⏳ purge dans {days_left} j" if days_left >= 0
+                            else "  ⏳ purge imminente"
+                        )
+
+                c_item = QTreeWidgetItem([f"💬  {label}{badge_txt}{origin}{time_suffix}{countdown_txt}"])
                 c_item.setData(0, Qt.ItemDataRole.UserRole, ("claude_conv", c_info))
+                if expiring:
+                    c_item.setForeground(0, expiry_color)
+                    c_item.setToolTip(
+                        0,
+                        f"Claude Code supprimera cette conversation dans "
+                        f"{max(_conv_days_left(c_info) or 0, 0)} jour(s) "
+                        f"(rétention configurée : {retention_days} j). "
+                        "Exportez-la (Markdown/PDF) pour la conserver.",
+                    )
                 parent.addChild(c_item)
                 return c_item
+
+            def _add_expiring_section(convs_pool) -> None:
+                """Section « ⏳ EXPIRENT BIENTÔT » : toujours en tête de l'arbre
+                (avant PROJETS / HORS PROJET / RÉCENTES, et aussi en vue projet
+                filtré) pour rester visible quel que soit le contexte — c'est le
+                but : repérer d'un coup d'œil ce qui va disparaître, sans avoir
+                à dérouler chaque projet."""
+                expiring = [c for c in convs_pool if _conv_is_expiring(c)]
+                if not expiring:
+                    return
+                expiring.sort(key=lambda c: _conv_days_left(c) if _conv_days_left(c) is not None else 0)
+                header_item = QTreeWidgetItem([f"⏳ EXPIRENT BIENTÔT ({len(expiring)})"])
+                header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                header_item.setForeground(0, expiry_color)
+                f = header_item.font(0)
+                f.setBold(True)
+                header_item.setFont(0, f)
+                self.tree.addTopLevelItem(header_item)
+                for c_info in expiring:
+                    _add_claude_conv_child(header_item, c_info, badge=True, show_countdown=True)
+                header_item.setExpanded(True)
 
             claude_filter = "ALL"
             if hasattr(self, "project_filter_combo") and self.project_filter_combo.count() > 0:
@@ -1966,6 +2024,7 @@ class AntigravityManagerWindow(QMainWindow):
             if claude_filter != "ALL" and claude_filter in self.claude_project_map:
                 # Vue projet unique — équivalent du CAS 2 Antigravity.
                 convs = self.claude_project_map[claude_filter]
+                _add_expiring_section(convs)
                 header_item = QTreeWidgetItem([f"PROJET : {claude_filter} ({len(convs)} convs)"])
                 header_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 header_item.setForeground(0, header_color)
@@ -2024,6 +2083,9 @@ class AntigravityManagerWindow(QMainWindow):
 
             all_claude_convs = [c for convs in self.claude_project_map.values() for c in convs]
 
+            # --- Section « ⏳ EXPIRENT BIENTÔT » : toujours en tête --------
+            _add_expiring_section(all_claude_convs)
+
             # --- Section 1 : PROJETS ---------------------------------
             proj_header_item = _make_section_header(f"PROJETS ({len(self.claude_project_map)})")
             for proj_name in sorted(self.claude_project_map.keys(), key=str.lower):
@@ -2060,12 +2122,12 @@ class AntigravityManagerWindow(QMainWindow):
             recent_header_item.setExpanded(False)
 
             # Rappel : Claude Code purge lui-même ses transcripts inactifs
-            # (clé `cleanupPeriodDays` de ~/.claude/settings.json, défaut
-            # 30 jours) — sans notification. L'export Markdown/PDF met une
-            # conversation à l'abri de cette purge.
+            # (clé `cleanupPeriodDays` de ~/.claude/settings.json) — sans
+            # notification. La section ⏳ ci-dessus liste celles qui approchent
+            # (< 7 j) ; ce bandeau rappelle le délai réellement configuré.
             note = QTreeWidgetItem([
-                "  ⚠️  Claude Code supprime les transcrits inactifs "
-                f"(défaut 30 j). Exportez pour conserver — voir {_CLAUDE_RETENTION_KEY}."
+                f"  ⚠️  Claude Code supprime les transcrits inactifs après "
+                f"{retention_days} j. Exportez pour conserver — voir {_CLAUDE_RETENTION_KEY}."
             ])
             note.setFlags(Qt.ItemFlag.ItemIsEnabled)
             note.setForeground(0, empty_color)
@@ -2596,7 +2658,11 @@ class AntigravityManagerWindow(QMainWindow):
         self.chat_title.setText(conv.title or "Conversation sans titre")
         date_str = conv.last_dt.strftime("%d/%m/%Y à %H:%M") if conv.last_dt else "Date inconnue"
         origin = f" • {conv.origin_label}" if conv.origin_label else ""
-        self.chat_meta.setText(f"📁 {conv.project}   •   {date_str}{origin}   •   ID: {conv.conv_id}")
+        meta_text = f"📁 {conv.project}   •   {date_str}{origin}   •   ID: {conv.conv_id}"
+        if is_near_expiry(conv.last_dt, get_retention_days()):
+            days_left = max(days_until_purge(conv.last_dt, get_retention_days()) or 0, 0)
+            meta_text += f"   •   ⏳ purge Claude Code dans {days_left} j — exportez pour conserver"
+        self.chat_meta.setText(meta_text)
         self.btn_open_folder.setVisible(False)
         self.btn_toggle_raw.setVisible(False)
         self.btn_find_toggle.setVisible(True)

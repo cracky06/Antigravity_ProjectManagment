@@ -23,6 +23,7 @@ Antigravity_ProjectManagment/
 ├── data_loader.py           # Moteur de données (parsing protobuf wire-format, extraction transcripts & artefacts)
 ├── archive.py               # Archivage incrémental des conversations dans <projet>/_archive/ (anti-disparition)
 ├── live_watch.py            # Résolution des fichiers à surveiller pour le suivi « live » d'une discussion ouverte
+├── claude_retention.py      # Détection des conversations Claude Code proches de la purge auto (cleanupPeriodDays)
 ├── search_index.py          # Index de recherche plein-texte SQLite FTS5 (search_index.db, gitignoré)
 ├── config.py                # Persistance de configuration (config.json, gestion sys.frozen)
 ├── run.bat                  # Lanceur direct sous Windows (auto-détection .venv)
@@ -72,6 +73,13 @@ Antigravity_ProjectManagment/
 * Boutons d'en-tête de la vue chat : `btn_refresh_chat` (🔄, re-rendu ponctuel) et `btn_live_follow` (🔴, checkable). `live_watch.antigravity_watch_paths()` / `claude_watch_paths()` renvoient les fichiers dont le mtime signale du nouveau contenu (transcripts, `.db` + `-wal`, à défaut le dossier `logs/`).
 * `_on_live_follow_toggled()` arme un `QFileSystemWatcher` **plus** un `QTimer` de repli (3 s) — le watcher rate des appends rapides et le remplacement de fichier (WAL SQLite). `_live_poll_check()` compare une signature `(path, mtime_ns, size)` et n'appelle `_rerender_current_chat()` que si elle a changé.
 * `load_chat_messages` / `load_claude_messages` étant indexés sur le mtime, un simple ré-appel de `display_chat` relit le disque. Le scroll est préservé, recollé en bas si on y était (tail). Le suivi se coupe au changement de conversation (`_reset_live_follow_ui()`), sur `_clear_chat()` et dans `closeEvent()`.
+
+### ⏳ Purge Claude Code — conversations proche expiration (`claude_retention.py`)
+
+* Claude Code supprime lui-même ses transcrits inactifs après `cleanupPeriodDays` jours (`~/.claude/settings.json`, **défaut 30 j si la clé est absente**), sans notification. `get_retention_days()` lit cette valeur (repli sur 30 si fichier absent/invalide/≤0) ; `days_until_purge()` / `is_near_expiry()` (marge par défaut `WARNING_MARGIN_DAYS = 7`) calculent l'état de chaque `ClaudeConv` à partir de son `last_dt`.
+* `_populate_tree()` (branche `_active_source == "claude_code"`) calcule `retention_days` et `now` **une seule fois par rendu** (cohérence de l'affichage) puis : (1) colore en rouge (`expiry_color`) toute conversation expirante partout où `_add_claude_conv_child()` l'affiche, avec une infobulle donnant le nombre de jours restants ; (2) insère une section `⏳ EXPIRENT BIENTÔT (N)` **toujours en première position** via `_add_expiring_section()` — appelée à la fois en vue « Tous les projets » et en vue projet filtré, pour rester visible dans les deux contextes.
+* `display_claude_chat()` ajoute le même avertissement (jours restants) dans `chat_meta` quand la conversation ouverte est expirante.
+* Le bandeau de rappel statique en bas d'arbre affiche désormais le délai **réellement configuré** (`retention_days`) au lieu du défaut 30 j codé en dur.
 
 ### 📦 Mode Compilé PyInstaller (`config.py`)
 

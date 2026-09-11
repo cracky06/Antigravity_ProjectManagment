@@ -26,6 +26,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - La source Claude Code offre la **même expérience** : arbre en 3 sections (PROJETS / HORS PROJET / RÉCENTES), filtre par projet, badge d'origine (VS Code / Desktop) et date, recherche globale, find bar locale, export Markdown/PDF *(v2.5)*
 - Une session Claude Code démarrée sur une autre machine ou interface (sans dossier local) mais avec un vrai échange apparaît en « CONVERSATIONS HORS PROJET » plutôt que d'être perdue *(v2.5)*
 - **Avertissement de rétention** : Claude Code purge lui-même ses transcrits inactifs (clé `cleanupPeriodDays` de `~/.claude/settings.json`, **défaut 30 jours**, sans notification). Un rappel discret sous l'arbre invite à **exporter en Markdown/PDF** pour conserver une conversation au-delà de ce délai *(v2.6)*
+- **Section « ⏳ EXPIRENT BIENTÔT »** (source Claude Code) : toujours en tête de l'arbre — y compris en vue projet filtré —, liste les conversations que Claude Code supprimera dans moins de 7 jours (délai réel lu dans `cleanupPeriodDays`, pas le défaut). Chaque entrée affiche un compte à rebours (« ⏳ purge dans N j ») ; ces conversations sont aussi surlignées en rouge partout où elles apparaissent dans l'arbre, avec une infobulle explicative. Le même avertissement apparaît dans l'en-tête de la vue discussion une fois ouverte *(v2.7)*
 
 ---
 
