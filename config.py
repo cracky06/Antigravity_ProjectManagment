@@ -32,6 +32,7 @@ DEFAULT_ANTIGRAVITY_ROOT = _detect_default_antigravity_root()
 # (`%USERPROFILE%`) : c'est ce qui s'affiche dans les Paramètres, et
 # `get_claude_root()` résout la variable à la lecture.
 DEFAULT_CLAUDE_ROOT = r"%USERPROFILE%\.claude\projects"
+DEFAULT_CODEX_ROOT = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -47,6 +48,7 @@ def load_config() -> dict:
         "projects_root": DEFAULT_PROJECTS_ROOT,
         "antigravity_root": DEFAULT_ANTIGRAVITY_ROOT,
         "claude_root": DEFAULT_CLAUDE_ROOT,
+        "codex_root": DEFAULT_CODEX_ROOT,
         "theme": "system",
     }
     if CONFIG_FILE.is_file():
@@ -473,3 +475,9 @@ def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     }
 
 
+
+
+def get_codex_root() -> Path:
+    """Dossier Codex configurable, CODEX_HOME respecté par défaut."""
+    raw = load_config().get("codex_root") or DEFAULT_CODEX_ROOT
+    return Path(os.path.expandvars(raw)).expanduser()

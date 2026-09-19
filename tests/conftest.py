@@ -18,6 +18,17 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["ANTIGRAVITY_MANAGER_NO_ARCHIVE"] = "1"
 
 
+@pytest.fixture(autouse=True)
+def isolated_app_data(tmp_path, monkeypatch):
+    """Les tests ne doivent ni lire ni modifier les historiques de l'utilisateur."""
+    import config
+
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(config, "DEFAULT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    monkeypatch.setattr(config, "DEFAULT_CODEX_ROOT", str(tmp_path / ".codex"))
+
+
 @pytest.fixture(scope="session")
 def qapp():
     from PyQt6.QtWidgets import QApplication
@@ -56,7 +67,17 @@ def isolated_search_index(tmp_path, monkeypatch):
     monkeypatch.setattr(search_index, "get_index_path", lambda: db_path)
     search_index.close_thread_connection()
 
+    import claude_search_index
+    import codex_search_index
+
+    monkeypatch.setattr(claude_search_index, "get_index_path", lambda: tmp_path / "claude_index.db")
+    monkeypatch.setattr(codex_search_index, "get_index_path", lambda: tmp_path / "codex_index.db")
+    claude_search_index.close_thread_connection()
+    codex_search_index.close_thread_connection()
+
     yield
 
     _drain_thread_pool()  # après : ne pas laisser de thread survivre au test
     search_index.close_thread_connection()
+    claude_search_index.close_thread_connection()
+    codex_search_index.close_thread_connection()

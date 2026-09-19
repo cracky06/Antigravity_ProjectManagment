@@ -37,3 +37,6 @@ temp/
 # Coordination multi-agents locale (mcp-multi-ai) : état de session, pas du code
 .mcp-multi-ai/
 agents.config.json
+
+# Cache dérivé de la source Codex
+codex_search_index.db*

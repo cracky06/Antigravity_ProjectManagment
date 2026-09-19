@@ -764,7 +764,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.on_save_callback = on_save_callback
         self.setWindowTitle("Paramètres — Dossiers sources & Thème")
-        self.setFixedSize(560, 430)
+        self.setMinimumSize(600, 650)
         self.setModal(True)
 
         is_dark = get_active_theme() == "dark"
@@ -816,6 +816,16 @@ class SettingsDialog(QDialog):
         cc_row.addWidget(btn_browse_cc)
         layout.addLayout(cc_row)
 
+        layout.addWidget(QLabel("Dossier Codex (CODEX_HOME) :"))
+        codex_row = QHBoxLayout()
+        self.codex_edit = QLineEdit(_cfg0.get("codex_root", DEFAULT_CODEX_ROOT))
+        self.codex_edit.setStyleSheet(input_style)
+        codex_row.addWidget(self.codex_edit)
+        codex_browse = QPushButton("Parcourir…")
+        codex_browse.clicked.connect(self._browse_codex)
+        codex_row.addWidget(codex_browse)
+        layout.addLayout(codex_row)
+
         # 4. Thème de l'interface
         layout.addWidget(QLabel("Thème de l'application :"))
         self.theme_combo = QComboBox()
@@ -837,7 +847,11 @@ class SettingsDialog(QDialog):
         # 4. Index de recherche plein-texte
         idx_row = QHBoxLayout()
         try:
-            _st = search_index.check_status()
+            if getattr(parent, "_active_source", "") == "codex":
+                import codex_search_index
+                _st = codex_search_index.check_status()
+            else:
+                _st = search_index.check_status()
             _idx_txt = _st.message
         except Exception as exc:  # pragma: no cover
             _idx_txt = f"état inconnu ({exc})"
@@ -923,6 +937,12 @@ class SettingsDialog(QDialog):
         if d:
             self.ag_edit.setText(d)
 
+    def _browse_codex(self):
+        start = os.path.expandvars(self.codex_edit.text())
+        path = QFileDialog.getExistingDirectory(self, "Sélectionner le dossier Codex", start)
+        if path:
+            self.codex_edit.setText(path)
+
     def _browse_claude(self):
         import os as _os
 
@@ -935,6 +955,7 @@ class SettingsDialog(QDialog):
         self.proj_edit.setText(str(DEFAULT_PROJECTS_ROOT))
         self.ag_edit.setText(str(DEFAULT_ANTIGRAVITY_ROOT))
         self.claude_edit.setText(DEFAULT_CLAUDE_ROOT)
+        self.codex_edit.setText(DEFAULT_CODEX_ROOT)
         self.theme_combo.setCurrentIndex(0)
         _i = self.archive_combo.findData("always")
         self.archive_combo.setCurrentIndex(_i if _i >= 0 else 0)
@@ -964,6 +985,7 @@ class SettingsDialog(QDialog):
         cfg["projects_root"] = self.proj_edit.text().strip()
         cfg["antigravity_root"] = self.ag_edit.text().strip()
         cfg["claude_root"] = self.claude_edit.text().strip() or DEFAULT_CLAUDE_ROOT
+        cfg["codex_root"] = self.codex_edit.text().strip() or DEFAULT_CODEX_ROOT
         cfg["theme"] = self.theme_combo.currentData()
         cfg["archive_frequency"] = self.archive_combo.currentData()
         save_config(cfg)
@@ -1184,7 +1206,12 @@ def _claude_source_icon() -> QIcon:
 # =====================================================================
 # Application Principale Antigravity Manager (PyQt6)
 # =====================================================================
-class AntigravityManagerWindow(QMainWindow):
+from codex_ui import CodexSourceMixin
+from codex_loader import codex_watch_paths
+from config import DEFAULT_CODEX_ROOT
+
+
+class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self.version = get_app_version()
@@ -1216,6 +1243,11 @@ class AntigravityManagerWindow(QMainWindow):
         # Source « Claude Code / Desktop » (v2.5, lecture seule) : arbre de
         # données parallèle, jamais mélangé avec celui d'Antigravity.
         self._active_source: str = "antigravity"   # "antigravity" | "claude_code"
+        self.codex_project_map: dict = {}
+        self.selected_codex_conv = None
+        self._codex_index_ready = False
+        self._codex_index_syncing = False
+        self._codex_archiving = False
         self.claude_project_map: dict = {}
         self.selected_claude_conv = None
         self.show_raw_markdown: bool = False
@@ -1275,7 +1307,8 @@ class AntigravityManagerWindow(QMainWindow):
 
         self._apply_theme()
         self._build_ui()
-        self.reload_data()  # déclenche aussi _kick_off_index_sync()
+        self.reload_data()
+        self._maybe_archive_codex(on_launch=True)  # déclenche aussi _kick_off_index_sync()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1295,6 +1328,7 @@ class AntigravityManagerWindow(QMainWindow):
         self._teardown_live_follow()
         try:
             self._thread_pool.waitForDone(3000)
+            self._archive_pool.waitForDone()
         except Exception:
             pass
         super().closeEvent(event)
@@ -1427,6 +1461,7 @@ class AntigravityManagerWindow(QMainWindow):
             self.source_combo.addItem("✳️ Claude Code / Desktop", "claude_code")
         else:
             self.source_combo.addItem(_cc_icon, "Claude Code / Desktop", "claude_code")
+        self.source_combo.addItem("◉ Codex", "codex")
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         sidebar_layout.addWidget(self.source_combo)
 
@@ -1663,9 +1698,14 @@ class AntigravityManagerWindow(QMainWindow):
         new_source = self.source_combo.currentData() or "antigravity"
         if new_source == self._active_source:
             return
+        self._search_generation += 1
+        self._search_timer.stop()
         self._active_source = new_source
         self.selected_claude_conv = None
         self._clear_chat()
+
+        if new_source == "codex":
+            self._load_codex_source()
 
         if new_source == "claude_code":
             self.status_bar.showMessage("Chargement des conversations Claude Code / Desktop…")
@@ -1692,6 +1732,9 @@ class AntigravityManagerWindow(QMainWindow):
         `restore_saved` : au tout premier chargement Antigravity, reprend le
         dernier filtre enregistré dans `_ui_state` (aucune sélection courante
         à ce stade sinon)."""
+        if self._active_source == "codex":
+            self._refresh_codex_filter()
+            return
         if not hasattr(self, "project_filter_combo"):
             return
         self.project_filter_combo.blockSignals(True)
@@ -1733,6 +1776,9 @@ class AntigravityManagerWindow(QMainWindow):
 
     def reload_data(self):
         self._apply_theme()
+        if self._active_source == "codex":
+            self._load_codex_source()
+            return
 
         # Le bouton 🔄 (et les actions de gestion Antigravity : suppression,
         # déplacement, import…) appellent reload_data() sans savoir quelle
@@ -1822,6 +1868,9 @@ class AntigravityManagerWindow(QMainWindow):
             self.status_bar.showMessage(f"🗄️ {message}", 5000)
 
     def archive_now(self):
+        if self._active_source == "codex":
+            self._archive_codex()
+            return
         """Action utilisateur : forcer un archivage immédiat (ignore la récurrence)."""
         if getattr(self, "_archiving", False):
             self.status_bar.showMessage("Archivage déjà en cours…", 3000)
@@ -1878,6 +1927,9 @@ class AntigravityManagerWindow(QMainWindow):
             )
 
     def rebuild_search_index(self):
+        if self._active_source == "codex":
+            self._kick_off_codex_index_sync(rebuild=True)
+            return
         """Action utilisateur : reconstruction complète de l'index."""
         if self._index_syncing:
             self.status_bar.showMessage("Indexation déjà en cours…", 3000)
@@ -1925,6 +1977,9 @@ class AntigravityManagerWindow(QMainWindow):
             )
 
     def _populate_tree(self):
+        if self._active_source == "codex":
+            self._populate_codex_tree()
+            return
         self.tree.clear()
         is_dark = get_active_theme() == "dark"
         header_color = QColor("#a1a1aa" if is_dark else "#64748b")
@@ -2287,9 +2342,11 @@ class AntigravityManagerWindow(QMainWindow):
         if dtype == "conv":
             c_info: ConversationInfo = data[1]
             self.display_chat(c_info)
+        elif dtype == "codex_conv":
+            self.display_codex_chat(data[1])
         elif dtype == "claude_conv":
             self.display_claude_chat(data[1])
-        elif dtype in ("project", "claude_project"):
+        elif dtype in ("project", "claude_project", "codex_project"):
             # Si on clique sur le projet, on bascule son expansion
             if item.childCount() > 0:
                 item.setExpanded(not item.isExpanded())
@@ -2308,6 +2365,8 @@ class AntigravityManagerWindow(QMainWindow):
                 # Navigation au clavier : on ne pollue pas l'historique du bouton ←
                 # (seuls un clic explicite, un résultat de recherche ou un lien empilent).
                 self.display_chat(c_info, record_history=False)
+        elif dtype == "codex_conv":
+            self.display_codex_chat(data[1])
         elif dtype == "claude_conv":
             c_info = data[1]
             if not self.selected_claude_conv or self.selected_claude_conv.conv_id != c_info.conv_id:
@@ -2797,6 +2856,8 @@ class AntigravityManagerWindow(QMainWindow):
 
     def _clear_chat(self):
         self._reset_live_follow_ui()
+        self.selected_codex_conv = None
+        self.selected_claude_conv = None
         self.selected_conv = None
         self.chat_title.setText("Sélectionnez une conversation")
         self.chat_meta.setText("Choisissez un projet ou une conversation dans la barre latérale.")
@@ -2838,7 +2899,9 @@ class AntigravityManagerWindow(QMainWindow):
         was_at_bottom = sb.value() >= sb.maximum() - 4
         old_value = sb.value()
 
-        if self._active_source == "claude_code" and self.selected_claude_conv is not None:
+        if self._active_source == "codex" and self.selected_codex_conv is not None:
+            self.display_codex_chat(self.selected_codex_conv)
+        elif self._active_source == "claude_code" and self.selected_claude_conv is not None:
             self.display_claude_chat(self.selected_claude_conv)
         elif self.selected_conv is not None:
             # record_history=False : un rafraîchissement n'est pas une navigation.
@@ -2854,13 +2917,15 @@ class AntigravityManagerWindow(QMainWindow):
 
     def _refresh_current_chat(self):
         """Action bouton 🔄 : rafraîchit la discussion ouverte."""
-        if self.selected_conv is None and self.selected_claude_conv is None:
+        if self.selected_conv is None and self.selected_claude_conv is None and self.selected_codex_conv is None:
             return
         self._rerender_current_chat(keep_scroll=True)
         self.status_bar.showMessage("Discussion rafraîchie.", 2000)
 
     def _current_watch_paths(self) -> list:
         """Chemins à surveiller pour la discussion ouverte (selon la source)."""
+        if self._active_source == "codex" and self.selected_codex_conv is not None:
+            return codex_watch_paths(self.selected_codex_conv)
         if self._active_source == "claude_code" and self.selected_claude_conv is not None:
             return claude_watch_paths(self.selected_claude_conv.path)
         if self.selected_conv is not None:
@@ -3082,7 +3147,7 @@ class AntigravityManagerWindow(QMainWindow):
         text = raw_bytes.decode("utf-8", errors="replace")
 
         # Mémorise la conversation à restaurer via le bouton ←.
-        self._file_view_return_conv = self.selected_conv
+        self._file_view_return_conv = self.selected_codex_conv if self._active_source == "codex" else self.selected_conv
         self._file_view_active = True
 
         is_dark = get_active_theme() == "dark"
@@ -3182,6 +3247,10 @@ class AntigravityManagerWindow(QMainWindow):
             conv = getattr(self, "_file_view_return_conv", None)
             self._file_view_return_conv = None
             self.btn_back.setToolTip("Revenir à la conversation précédente")
+            if conv is not None and self._active_source == "codex":
+                self.display_codex_chat(conv)
+                self.btn_back.setVisible(False)
+                return
             if conv is not None:
                 self._nav_suppress_push = True
                 try:
@@ -3263,6 +3332,9 @@ class AntigravityManagerWindow(QMainWindow):
             self._search_timer.start(200)
 
     def _do_search(self):
+        if self._active_source == "codex":
+            self._search_codex()
+            return
         """Lance une recherche asynchrone dans le périmètre du filtre projet actif."""
         query = self.search_input.text().strip()
         if not query:
@@ -3343,6 +3415,9 @@ class AntigravityManagerWindow(QMainWindow):
 
     def _get_search_scope(self) -> list[ConversationInfo]:
         """Retourne la liste des conversations dans le périmètre du filtre actif."""
+        if self._active_source == "codex":
+            self._refresh_codex_filter()
+            return
         if not hasattr(self, "project_filter_combo"):
             return self.all_convs
         filter_val = self.project_filter_combo.currentData() or "ALL"
@@ -3357,6 +3432,9 @@ class AntigravityManagerWindow(QMainWindow):
     def _get_claude_search_scope(self) -> list:
         """Équivalent de `_get_search_scope` pour la source Claude Code."""
         all_convs = [c for convs in self.claude_project_map.values() for c in convs]
+        if self._active_source == "codex":
+            self._refresh_codex_filter()
+            return
         if not hasattr(self, "project_filter_combo"):
             return all_convs
         filter_val = self.project_filter_combo.currentData() or "ALL"
@@ -3391,7 +3469,8 @@ class AntigravityManagerWindow(QMainWindow):
         self.tree.addTopLevelItem(header_item)
 
         is_claude = self._active_source == "claude_code"
-        conv_dtype = "claude_conv" if is_claude else "conv"
+        is_codex = self._active_source == "codex"
+        conv_dtype = "codex_conv" if is_codex else "claude_conv" if is_claude else "conv"
         for proj_name, convs in sorted(results.items(), key=lambda x: x[0].lower()):
             p_item = QTreeWidgetItem([f"📁  {proj_name}  ({len(convs)})"])
             p_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -3403,7 +3482,7 @@ class AntigravityManagerWindow(QMainWindow):
                     display_title = display_title[:36] + "…"
                 # ClaudeConv n'a pas de temps relatif ; on affiche sa date
                 # comme dans l'arbre normal de cette source.
-                if is_claude:
+                if is_claude or is_codex:
                     time_suffix = (
                         f"   {c_info.last_dt.strftime('%d/%m %H:%M')}" if c_info.last_dt else ""
                     )
@@ -3416,7 +3495,7 @@ class AntigravityManagerWindow(QMainWindow):
                 )
                 c_item = QTreeWidgetItem([f"💬  {display_title}{origin}{time_suffix}"])
                 c_item.setData(0, Qt.ItemDataRole.UserRole, (conv_dtype, c_info))
-                if not is_claude:
+                if not is_claude and not is_codex:
                     _apply_conv_item_icon(c_item, c_info, is_dark)
                 p_item.addChild(c_item)
 
@@ -3450,7 +3529,7 @@ class AntigravityManagerWindow(QMainWindow):
         Fonctionne pour les deux sources : `_recompute_find_matches` opère
         directement sur `self.chat_browser.document()`, sans distinction —
         seul un contenu affiché (Antigravity OU Claude Code) est requis."""
-        if not self.selected_conv and not self.selected_claude_conv:
+        if not self.selected_conv and not self.selected_claude_conv and not self.selected_codex_conv:
             return
         self.find_bar.setVisible(True)
         if prefill and self.find_input.text() != prefill:
@@ -3675,6 +3754,9 @@ class AntigravityManagerWindow(QMainWindow):
             return
 
         dtype = data[0]
+        if dtype in ("codex_project", "codex_conv"):
+            self._build_codex_context_menu(dtype, data, pos)
+            return
         if dtype in ("claude_project", "claude_conv"):
             # Source Claude Code / Desktop (v2.5) : export Markdown seulement.
             # Suppression/déplacement délibérément absents — ce sont des
