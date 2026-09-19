@@ -27,6 +27,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Une session Claude Code démarrée sur une autre machine ou interface (sans dossier local) mais avec un vrai échange apparaît en « CONVERSATIONS HORS PROJET » plutôt que d'être perdue *(v2.5)*
 - **Avertissement de rétention** : Claude Code purge lui-même ses transcrits inactifs (clé `cleanupPeriodDays` de `~/.claude/settings.json`, **défaut 30 jours**, sans notification). Un rappel discret sous l'arbre invite à **exporter en Markdown/PDF** pour conserver une conversation au-delà de ce délai *(v2.6)*
 - **Section « ⏳ EXPIRENT BIENTÔT »** (source Claude Code) : toujours en tête de l'arbre — y compris en vue projet filtré —, liste les conversations que Claude Code supprimera dans moins de 7 jours (délai réel lu dans `cleanupPeriodDays`, pas le défaut). Chaque entrée affiche un compte à rebours (« ⏳ purge dans N j ») ; ces conversations sont aussi surlignées en rouge partout où elles apparaissent dans l'arbre, avec une infobulle explicative. Le même avertissement apparaît dans l'en-tête de la vue discussion une fois ouverte *(v2.7)*
+- **Troisième source « Codex »** : le sélecteur de source propose désormais Antigravity, Claude Code / Desktop et Codex. Lecture des conversations Codex locales (fichiers rollout JSONL et bases SQLite en lecture seule) *(v2.8)*
 
 ---
 
@@ -67,6 +68,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Bouton **« Réindexer »** dans les Paramètres + affichage de l'état de l'index (prêt / absent / corrompu) *(v1.5)*
 - **Indexation au fil de l'eau** : l'index se met à jour dès qu'une conversation est consultée *(v2.2)*
 - La recherche globale fonctionne aussi sur la source **Claude Code / Desktop** (index dédié, mêmes 3 modes) *(v2.5)*
+- La recherche globale fonctionne aussi sur la source **Codex** (index dédié `codex_search_index.db`, mêmes 3 modes) *(v2.8)*
 
 ### Barre de recherche locale (dans une discussion)
 
@@ -106,6 +108,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - **Archiver (ZIP) et supprimer un projet** : crée un ZIP de toutes les conversations (Markdown + images) puis supprime le projet en cascade — l'historique est conservé après suppression *(v2.4)*
 - Garde-fou : l'archive ZIP ne peut pas être placée dans le dossier qui va être supprimé *(v2.4)*
 - **Source Claude Code / Desktop** : export Markdown (une conversation ou tout un projet) et export PDF du projet, écrits dans le dossier `_conversations/` du vrai dossier de code du projet. Pas de suppression ni de déplacement (fichiers gérés par Claude Code) *(v2.5)*
+- **Source Codex** : export Markdown et export PDF des conversations Codex *(v2.8)*
 
 ---
 
@@ -136,6 +139,7 @@ Le numéro entre parenthèses indique la version où la fonctionnalité a été 
 - Lecture résiliente en cas de fichier log ou metadata absent/corrompu *(v1.0)*
 - Découverte multi-dossiers `.gemini` (antigravity-ide / antigravity / antigravity-backup) *(v1.0)*
 - **Archivage automatique et incrémental des conversations** : au lancement et avant chaque (ré)indexation, une copie de secours de chaque conversation est écrite dans `<projet>/_archive/` — dossier `store/<conv_id>/` en clair (brut `.db`/`.pb` **sans les images** + export Markdown) et `conversations.zip` régénéré. Seuls les projets ayant une conversation **nouvelle ou modifiée** (comparaison mtime + taille) sont réécrits ; une conversation archivée **n'est jamais supprimée**, même si Antigravity ne la connaît plus. Anticipe toute disparition (réinitialisation de l'index, purge, corruption) *(v2.7)*
+- **Archivage dédié pour la source Codex**, séparé des archives Antigravity et Claude Code *(v2.8)*
 - **Réécriture de `agyhub_summaries_proto.pb` sécurisée** (déplacement de conversation) : le fichier reconstruit est relu et **rejeté s'il a perdu des entrées** (l'index officiel reste intact), écriture atomique `.tmp` + `os.replace` pour qu'un crash ne laisse jamais un index tronqué *(v2.7)*
 - **Conversations récentes de l'Antigravity IDE** (stockées en base SQLite `conversations/*.db`, sans dossier `brain/`) désormais lues : titre, date, projet et dialogue complet — au lieu d'une entrée vide *(v2.6)*
 - **Conversations Antigravity au format hérité** (fichier `.pb` opaque, avril/mai 2026) : dialogue complet reconstruit à la volée via le moteur local d'Antigravity s'il est ouvert, sinon aperçu partiel depuis les résumés de session ; bandeau discret signalant la reconstruction *(v2.6)*

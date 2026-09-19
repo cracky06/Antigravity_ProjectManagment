@@ -256,6 +256,10 @@ def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     return {
         "v2.8": {
             "✨ Nouvelles fonctionnalités (feat)": [
+                "Nouvelle source de données « Codex » (sélecteur en haut de la barre latérale, aux côtés d'Antigravity et Claude Code) : lit les conversations Codex locales, aussi bien les fichiers rollout JSONL que les bases SQLite en lecture seule",
+                "Recherche globale plein texte dédiée aux conversations Codex, avec son propre index (codex_search_index.db)",
+                "Archivage automatique et incrémental dédié à la source Codex, séparé des archives Antigravity et Claude Code",
+                "Export Markdown/PDF des conversations Codex",
                 "Section « ⏳ EXPIRENT BIENTÔT » (source Claude Code) : toujours en tête de l'arbre, même en vue projet filtré, liste les conversations que Claude Code supprimera dans moins de 7 jours — délai calculé sur la vraie valeur de cleanupPeriodDays (~/.claude/settings.json), pas le défaut. Compte à rebours affiché sur chaque entrée",
                 "Ces conversations expirantes sont surlignées en rouge partout où elles apparaissent dans l'arbre, avec une infobulle donnant le nombre de jours restants ; le même avertissement apparaît dans l'en-tête de la vue discussion une fois ouverte",
                 "Le bandeau de rappel sous l'arbre Claude Code affiche désormais le délai réellement configuré au lieu du défaut 30 jours codé en dur",
