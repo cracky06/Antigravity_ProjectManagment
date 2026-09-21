@@ -10,6 +10,8 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
+import uuid
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1344,15 +1346,263 @@ def delete_conversation(conv_id: str) -> tuple[bool, str]:
     return True, "Conversation supprimée avec succès."
 
 
+def _find_all_summaries_db() -> list[Path]:
+    """Localise tous les fichiers conversation_summaries.db existants dans .gemini/."""
+    _, antigravity_root, _, _, _ = get_paths()
+    dbs = []
+    direct = antigravity_root / "conversation_summaries.db"
+    if direct.is_file():
+        dbs.append(direct)
+    gemini_parent = antigravity_root.parent
+    for sub in ("antigravity", "antigravity-ide", "antigravity-backup"):
+        cand = gemini_parent / sub / "conversation_summaries.db"
+        if cand.is_file() and cand not in dbs:
+            dbs.append(cand)
+    return dbs
+
+
+def _resolve_target_project_id_and_uris(
+    target_project_name: str, target_project_dir: Path
+) -> tuple[str, str, bytes, str]:
+    """Trouve ou génère le project_id et l'URI canonique pour le projet cible.
+
+    Retourne:
+      (project_id, canonical_uri, canonical_uri_bytes, workspace_uris_json)
+    """
+    found_pid = None
+    found_uri = None
+    target_clean = target_project_name.lower().strip("/\\")
+
+    # 1. Chercher dans les conversation_summaries.db existants
+    for db_path in _find_all_summaries_db():
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            rows = conn.execute(
+                "SELECT project_id, workspace_uris FROM conversation_summaries "
+                "WHERE project_id != '' AND project_id != 'outside-of-project'"
+            ).fetchall()
+            conn.close()
+            for pid, uris_str in rows:
+                if not pid or not uris_str:
+                    continue
+                uris_lower = uris_str.lower().replace("\\", "/").replace("%3a", ":")
+                if f"/{target_clean}" in uris_lower or target_clean == uris_lower.rstrip("/").split("/")[-1]:
+                    found_pid = pid
+                    try:
+                        parsed_list = json.loads(uris_str)
+                        if parsed_list and isinstance(parsed_list, list):
+                            found_uri = parsed_list[0]
+                    except Exception:
+                        pass
+                    break
+            if found_pid:
+                break
+        except Exception as exc:
+            logger.debug("Erreur lecture %s pour resolve PID : %s", db_path, exc)
+
+    # 2. Chercher dans agyhub_summaries_proto.pb par scan binaire si pas encore trouvé
+    if not found_pid:
+        summaries_pb = _find_summaries_pb()
+        if summaries_pb and summaries_pb.is_file():
+            try:
+                raw_bytes = summaries_pb.read_bytes()
+                for m in re.finditer(rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", raw_bytes):
+                    start = max(0, m.start() - 200)
+                    end = min(len(raw_bytes), m.end() + 200)
+                    chunk = raw_bytes[start:end].lower()
+                    if target_clean.encode() in chunk:
+                        found_pid = m.group(0).decode("ascii")
+                        break
+            except Exception as exc:
+                logger.debug("Erreur scan pb pour resolve PID : %s", exc)
+
+    project_id = found_pid if found_pid else str(uuid.uuid4())
+
+    if found_uri:
+        canonical_uri = found_uri
+    else:
+        dir_str = str(target_project_dir).replace("\\", "/")
+        canonical_uri = f"file:///{dir_str.lstrip('/')}"
+        if len(dir_str) >= 2 and dir_str[1] == ":":
+            drive = dir_str[0].lower()
+            rest = dir_str[2:].lstrip("/")
+            canonical_uri = f"file:///{drive}%3A/{rest}"
+
+    canonical_uri_bytes = canonical_uri.encode("utf-8")
+    workspace_uris_json = json.dumps([canonical_uri])
+
+    return project_id, canonical_uri, canonical_uri_bytes, workspace_uris_json
+
+
+def _update_proto_submessage(
+    raw_sub: bytes, new_project_id: str, new_uri_bytes: bytes
+) -> bytes:
+    """Met à jour le champ 4 (project_id) et les champs 9 et 17 (workspace URI)
+    dans un sous-message de summary (submessage 2 de agyhub_summaries_proto ou raw_summary SQLite).
+    """
+    sub_f = _parse_proto_fields(raw_sub) if raw_sub else {}
+
+    # 1. Mise à jour du project_id (champ 4)
+    sub_f[4] = [(2, new_project_id.encode("utf-8"))]
+
+    # 2. Mise à jour du workspace dans champ 9
+    if 9 in sub_f:
+        new_sub9 = []
+        for s9_wt, s9_val in sub_f[9]:
+            if isinstance(s9_val, bytes):
+                nested = _parse_proto_fields(s9_val)
+                for k in (1, 2, 7):
+                    if k in nested:
+                        nested[k] = [(2, new_uri_bytes)]
+                rb = bytearray()
+                for nf, nitems in nested.items():
+                    for nw, nv in nitems:
+                        rb.extend(_encode_proto_field(nf, nw, nv))
+                new_sub9.append((s9_wt, bytes(rb)))
+            else:
+                new_sub9.append((s9_wt, s9_val))
+        sub_f[9] = new_sub9
+    else:
+        nested_bytes = (
+            _encode_proto_field(1, 2, new_uri_bytes)
+            + _encode_proto_field(2, 2, new_uri_bytes)
+            + _encode_proto_field(7, 2, new_uri_bytes)
+        )
+        sub_f[9] = [(2, nested_bytes)]
+
+    # 3. Mise à jour du workspace dans champ 17
+    if 17 in sub_f:
+        new_sub17 = []
+        for s17_wt, s17_val in sub_f[17]:
+            if isinstance(s17_val, bytes):
+                nested = _parse_proto_fields(s17_val)
+                for k in (7, 1):
+                    if k in nested:
+                        nested[k] = [(2, new_uri_bytes)]
+                rb = bytearray()
+                for nf, nitems in nested.items():
+                    for nw, nv in nitems:
+                        rb.extend(_encode_proto_field(nf, nw, nv))
+                new_sub17.append((s17_wt, bytes(rb)))
+            else:
+                new_sub17.append((s17_wt, s17_val))
+        sub_f[17] = new_sub17
+    else:
+        nested17_bytes = (
+            _encode_proto_field(7, 2, new_uri_bytes)
+            + _encode_proto_field(1, 2, new_uri_bytes)
+        )
+        sub_f[17] = [(2, nested17_bytes)]
+
+    rb_sub2 = bytearray()
+    for sf, sitems in sub_f.items():
+        for sw, sv in sitems:
+            rb_sub2.extend(_encode_proto_field(sf, sw, sv))
+    return bytes(rb_sub2)
+
+
+def _update_conversation_summaries_db(
+    conv_id: str,
+    project_id: str,
+    workspace_uris_json: str,
+    new_uri_bytes: bytes,
+    sub_raw_bytes: bytes | None = None,
+) -> bool:
+    """Met à jour la ligne dans conversation_summaries.db (project_id, workspace_uris, raw_summary)."""
+    dbs = _find_all_summaries_db()
+    updated_any = False
+    for db_path in dbs:
+        try:
+            _backup_pb_file(db_path)
+            conn = sqlite3.connect(db_path, timeout=10.0)
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT raw_summary FROM conversation_summaries WHERE conversation_id = ?",
+                (conv_id,),
+            ).fetchone()
+
+            if row is not None:
+                if row[0] and isinstance(row[0], (bytes, bytearray)):
+                    new_raw = _update_proto_submessage(bytes(row[0]), project_id, new_uri_bytes)
+                elif sub_raw_bytes:
+                    new_raw = sub_raw_bytes
+                else:
+                    new_raw = _update_proto_submessage(b"", project_id, new_uri_bytes)
+
+                cur.execute(
+                    "UPDATE conversation_summaries SET project_id = ?, workspace_uris = ?, raw_summary = ? "
+                    "WHERE conversation_id = ?",
+                    (project_id, workspace_uris_json, new_raw, conv_id),
+                )
+                conn.commit()
+                updated_any = True
+                logger.debug(
+                    "conversation_summaries.db mis à jour (%s) pour conv %s -> project_id %s",
+                    db_path,
+                    conv_id,
+                    project_id,
+                )
+            conn.close()
+        except Exception as exc:
+            logger.warning("Échec mise à jour %s pour %s : %s", db_path, conv_id, exc)
+    return updated_any
+
+
+def _update_ide_sqlite_db_workspace(conv_id: str, new_uri_bytes: bytes) -> bool:
+    """Met à jour trajectory_metadata_blob dans conversations/<conv_id>.db si présent."""
+    _, antigravity_root, _, _, _ = get_paths()
+    gemini_parent = antigravity_root.parent
+    updated = False
+    candidates = [antigravity_root / "conversations" / f"{conv_id}.db"]
+    for sub in ("antigravity-ide", "antigravity", "antigravity-backup"):
+        p = gemini_parent / sub / "conversations" / f"{conv_id}.db"
+        if p not in candidates:
+            candidates.append(p)
+
+    for db_path in candidates:
+        if not db_path.is_file():
+            continue
+        try:
+            conn = sqlite3.connect(db_path, timeout=10.0)
+            row = conn.execute("SELECT data FROM trajectory_metadata_blob WHERE id='main'").fetchone()
+            if row and row[0]:
+                top = _parse_proto_fields(row[0])
+                if 1 in top and top[1] and isinstance(top[1][0][1], bytes):
+                    sub1 = _parse_proto_fields(top[1][0][1])
+                    sub1[1] = [(2, new_uri_bytes)]
+                    rb_sub1 = bytearray()
+                    for sf, sitems in sub1.items():
+                        for sw, sv in sitems:
+                            rb_sub1.extend(_encode_proto_field(sf, sw, sv))
+                    top[1] = [(2, bytes(rb_sub1))]
+                    rb_top = bytearray()
+                    for tf, titems in top.items():
+                        for tw, tv in titems:
+                            rb_top.extend(_encode_proto_field(tf, tw, tv))
+                    conn.execute("UPDATE trajectory_metadata_blob SET data = ? WHERE id='main'", (bytes(rb_top),))
+                    conn.commit()
+                    updated = True
+                    logger.debug("trajectory_metadata_blob mis à jour pour %s dans %s", conv_id, db_path)
+            conn.close()
+        except Exception as exc:
+            logger.warning("Échec mise à jour trajectory_metadata_blob %s : %s", db_path, exc)
+    return updated
+
+
 def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str]:
     """Déplace et réassigne officiellement une conversation vers un projet cible.
-    Met à jour echange_IA.md, les logs transcripts et les métadonnées protobuf pour
-    qu'Antigravity IDE reconnaisse la conversation sous le nouveau projet.
+    Met à jour echange_IA.md, les transcripts, agyhub_summaries_proto.pb,
+    conversation_summaries.db et les bases conversations/<cid>.db pour qu'Antigravity
+    Desktop et IDE reconnaissent la conversation sous le nouveau projet.
     """
     projects_root, antigravity_root, _, _, _ = get_paths()
     target_project_dir = projects_root / target_project_name
-    new_uri = f"file:///{str(target_project_dir).replace(chr(92), '/')}"
-    new_uri_bytes = new_uri.encode("utf-8")
+    (
+        project_id,
+        canonical_uri,
+        new_uri_bytes,
+        workspace_uris_json,
+    ) = _resolve_target_project_id_and_uris(target_project_name, target_project_dir)
     gemini_parent = antigravity_root.parent
 
     # 1. Mise à jour de brain/conv_id/echange_IA.md
@@ -1376,12 +1626,13 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
             if t_file.is_file():
                 try:
                     content = t_file.read_text(encoding="utf-8", errors="ignore")
-                    updated = re.sub(r"(\[URI\]\s*->\s*\[CorpusName\]:\s*\n?\s*)([^\s\n\r]+)", rf"\g<1>{new_uri}", content)
+                    updated = re.sub(r"(\[URI\]\s*->\s*\[CorpusName\]:\s*\n?\s*)([^\s\n\r]+)", rf"\g<1>{canonical_uri}", content)
                     t_file.write_text(updated, encoding="utf-8")
                 except Exception as exc:
                     logger.warning("Échec MAJ transcript %s : %s", t_file, exc)
 
     # 3. Mise à jour dans agyhub_summaries_proto.pb
+    last_sub2_bytes = None
     for sub in ("antigravity-ide", "antigravity", "antigravity-backup"):
         pb_path = gemini_parent / sub / "agyhub_summaries_proto.pb"
         if not pb_path.is_file():
@@ -1397,46 +1648,9 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
                 f = _parse_proto_fields(raw_entry)
                 cid = f.get(1, [('', b'')])[0][1].decode('utf-8', errors='ignore').strip()
                 if cid == conv_id and 2 in f:
-                    sub_f = _parse_proto_fields(f[2][0][1])
-                    if 9 in sub_f:
-                        new_sub9 = []
-                        for s9_wt, s9_val in sub_f[9]:
-                            if isinstance(s9_val, bytes):
-                                nested = _parse_proto_fields(s9_val)
-                                for k in (1, 2, 7):
-                                    if k in nested:
-                                        nested[k] = [(2, new_uri_bytes)]
-                                rb = bytearray()
-                                for nf, nitems in nested.items():
-                                    for nw, nv in nitems:
-                                        rb.extend(_encode_proto_field(nf, nw, nv))
-                                new_sub9.append((s9_wt, bytes(rb)))
-                            else:
-                                new_sub9.append((s9_wt, s9_val))
-                        sub_f[9] = new_sub9
-
-                    if 17 in sub_f:
-                        new_sub17 = []
-                        for s17_wt, s17_val in sub_f[17]:
-                            if isinstance(s17_val, bytes):
-                                nested = _parse_proto_fields(s17_val)
-                                for k in (7, 1):
-                                    if k in nested:
-                                        nested[k] = [(2, new_uri_bytes)]
-                                rb = bytearray()
-                                for nf, nitems in nested.items():
-                                    for nw, nv in nitems:
-                                        rb.extend(_encode_proto_field(nf, nw, nv))
-                                new_sub17.append((s17_wt, bytes(rb)))
-                            else:
-                                new_sub17.append((s17_wt, s17_val))
-                        sub_f[17] = new_sub17
-
-                    rb_sub2 = bytearray()
-                    for sf, sitems in sub_f.items():
-                        for sw, sv in sitems:
-                            rb_sub2.extend(_encode_proto_field(sf, sw, sv))
-                    f[2] = [(2, bytes(rb_sub2))]
+                    new_sub2 = _update_proto_submessage(f[2][0][1], project_id, new_uri_bytes)
+                    f[2] = [(2, new_sub2)]
+                    last_sub2_bytes = new_sub2
 
                     rb_entry = bytearray()
                     for ef, eitems in f.items():
@@ -1459,11 +1673,6 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
                 )
             )
 
-            # Garde-fou : le protobuf reconstruit doit se relire et conserver
-            # AU MOINS autant d'entrées que l'original. Un décodage partiel
-            # (wire-types 3/4, octet inattendu -> break dans _parse_proto_fields)
-            # peut silencieusement tronquer l'index ; on refuse alors d'écrire
-            # plutôt que de réinitialiser la liste des conversations.
             check = _parse_proto_fields(rebuilt_file)
             n_before = len(entries)
             n_after = len(check.get(1, []))
@@ -1475,10 +1684,7 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
                 )
                 continue
 
-            # Sauvegarde préventive AVANT d'écraser le fichier officiel.
             _backup_pb_file(pb_path)
-            # Écriture atomique : tmp + os.replace (atomique sur Windows et POSIX)
-            # pour qu'un crash en cours d'écriture ne laisse jamais un .pb tronqué.
             tmp_path = pb_path.with_name(pb_path.name + ".tmp")
             tmp_path.write_bytes(rebuilt_file)
             os.replace(tmp_path, pb_path)
@@ -1498,7 +1704,19 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
             except OSError:
                 pass
 
-    # 4. Invalider le cache mémoire
+    # 4. Mise à jour dans conversation_summaries.db
+    _update_conversation_summaries_db(
+        conv_id,
+        project_id,
+        workspace_uris_json,
+        new_uri_bytes,
+        sub_raw_bytes=last_sub2_bytes,
+    )
+
+    # 5. Mise à jour dans conversations/<cid>.db (format SQLite IDE)
+    _update_ide_sqlite_db_workspace(conv_id, new_uri_bytes)
+
+    # 6. Invalider le cache mémoire
     if conv_id in _CHAT_CACHE:
         del _CHAT_CACHE[conv_id]
 

@@ -254,6 +254,11 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.9": {
+            "🐛 Corrections (fix)": [
+                "Déplacement de conversation (move) : une discussion déplacée vers un autre projet apparaissait bien sous son nouveau projet dans AntigravityManager mais restait dans son projet d'origine dans Google Antigravity Desktop. La synchronisation met désormais à jour simultanément la base SQLite officielle d'Antigravity Desktop (conversation_summaries.db avec son project_id UUID, workspace_uris et BLOB raw_summary), le champ 4 du fichier agyhub_summaries_proto.pb, et les métadonnées de trajectoire de l'IDE (trajectory_metadata_blob)",
+            ],
+        },
         "v2.8": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Nouvelle source de données « Codex » (sélecteur en haut de la barre latérale, aux côtés d'Antigravity et Claude Code) : lit les conversations Codex locales, aussi bien les fichiers rollout JSONL que les bases SQLite en lecture seule",
