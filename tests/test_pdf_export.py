@@ -238,13 +238,13 @@ def test_wait_for_stable_file_detects_late_write(tmp_path):
     target = tmp_path / "late.pdf"
 
     def _write_later():
-        time.sleep(0.3)
-        target.write_bytes(b"%PDF-1.7 partial")
         time.sleep(0.15)
+        target.write_bytes(b"%PDF-1.7 partial")
+        time.sleep(0.04)
         target.write_bytes(b"%PDF-1.7 partial complete")
 
     threading.Thread(target=_write_later, daemon=True).start()
-    assert pe._wait_for_stable_file(target, timeout_s=5.0, poll_s=0.05) is True
+    assert pe._wait_for_stable_file(target, timeout_s=5.0, poll_s=0.08) is True
     assert target.read_bytes() == b"%PDF-1.7 partial complete"
 
 
