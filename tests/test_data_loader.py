@@ -419,3 +419,60 @@ def test_move_conversation_reuses_existing_project_id(tmp_path, monkeypatch):
     assert row[0] == known_pid
 
 
+def test_move_conversation_inserts_missing_summary_and_syncs_desktop(tmp_path, monkeypatch):
+    """Vérifie que move_conversation insère les conversations absentes dans conversation_summaries.db
+    et que f17[18] (project_id reconnu par Antigravity Desktop) et f17[7] (URI) sont bien définis."""
+    import sqlite3
+    from data_loader import move_conversation, _parse_proto_fields
+
+    parent = tmp_path / ".gemini"
+    ag = parent / "antigravity"
+    ag.mkdir(parents=True)
+    (tmp_path / "DEV").mkdir(parents=True)
+    monkeypatch.setattr("data_loader.get_antigravity_root", lambda: ag)
+    monkeypatch.setattr("data_loader.get_projects_root", lambda: tmp_path / "DEV")
+
+    # Base summaries initialement vide pour ce cid
+    db_path = ag / "conversation_summaries.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE conversation_summaries ("
+        "conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, step_count INTEGER, "
+        "last_modified_time DATETIME, workspace_uris TEXT, status TEXT, source TEXT, "
+        "project_id TEXT, agent_name TEXT, parent_conversation_id TEXT, nesting_depth INTEGER, "
+        "battle_id TEXT, winning_conversation_id TEXT, not_fully_idle NUMERIC, killed NUMERIC, "
+        "last_user_input_time DATETIME, last_user_input_step_index INTEGER, app_data_dir TEXT, "
+        "raw_summary BLOB, group_id TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    cid = "conv-new-ide-origin-1234"
+    ok, _ = move_conversation(cid, "DesktopTargetProject")
+    assert ok is True
+
+    # Vérifie que la ligne a été insérée
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT title, project_id, workspace_uris, raw_summary FROM conversation_summaries WHERE conversation_id = ?",
+        (cid,),
+    ).fetchone()
+    conn.close()
+
+    assert row is not None
+    title, pid, uris, raw_summary = row
+    assert "DesktopTargetProject" in uris
+    assert pid and len(pid) > 10
+    assert raw_summary is not None
+
+    top = _parse_proto_fields(raw_summary)
+    assert 17 in top
+    sub17 = _parse_proto_fields(top[17][0][1])
+    assert 18 in sub17
+    # Le champ 18 dans submessage 17 doit correspondre exactement au project_id de la table !
+    assert sub17[18][0][1].decode("utf-8") == pid
+    assert 7 in sub17
+    assert "DesktopTargetProject" in sub17[7][0][1].decode("utf-8")
+
+
+
