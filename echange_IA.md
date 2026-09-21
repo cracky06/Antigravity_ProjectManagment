@@ -113,3 +113,18 @@
 - Ajout des tests `tests/test_codex_loader.py` et `tests/test_codex_integration.py`.
 - Validation : `259 passed, 1 skipped` avec `.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --tb=short`.
 - Note : la version officielle reste geree uniquement par le fichier `VERSION`.
+
+## 2026-09-21 - [v2.9] Correctif de synchronisation du déplacement de conversation (`move_conversation`)
+
+- **Problème résolu** : Une conversation déplacée via AntigravityManager apparaissait bien sous son nouveau projet dans l'app, mais restait dans son projet d'origine dans Google Antigravity Desktop.
+- **Cause** : Antigravity Desktop s'appuie principalement sur `%USERPROFILE%\.gemini\antigravity\conversation_summaries.db` (table `conversation_summaries`), où les conversations sont regroupées par `project_id` (UUID du projet), et sur le champ 4 (`project_id`) des sous-messages Protobuf (`raw_summary` et `agyhub_summaries_proto.pb`). L'ancienne implémentation ne mettait à jour que les URI dans les champs 9/17 du `.pb` et écrivait un override local `echange_IA.md` sans jamais mettre à jour `conversation_summaries.db` ni le `project_id`.
+- **Modifications apportées (`data_loader.py`)** :
+  - `_resolve_target_project_id_and_uris` : résout ou génère l'UUID `project_id` et l'URI canonique pour le projet cible en réutilisant le `project_id` existant si d'autres conversations sont déjà rattachées au projet cible.
+  - `_update_proto_submessage` : met à jour le champ 4 (`project_id`) ainsi que les sous-messages d'URI 9 et 17, y compris lorsque le sous-message initial est vide.
+  - `_update_conversation_summaries_db` : met à jour atomiquement `project_id`, `workspace_uris` et le BLOB `raw_summary` dans toutes les bases `conversation_summaries.db` détectées, avec sauvegarde de sécurité `.bak`.
+  - `_update_ide_sqlite_db_workspace` : met à jour l'URI de workspace dans la table `trajectory_metadata_blob` (id `'main'`) des bases `conversations/<cid>.db` pour la prise en charge de l'IDE.
+- **Tests unitaires (`tests/test_data_loader.py`)** :
+  - `test_move_conversation_updates_sqlite_summaries_db`
+  - `test_move_conversation_updates_ide_trajectory_and_proto_field4`
+  - `test_move_conversation_reuses_existing_project_id`
+- **Validation** : 262 passed, 1 skipped.

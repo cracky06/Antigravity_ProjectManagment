@@ -279,3 +279,143 @@ def test_conversation_info_origin_label():
     assert ConversationInfo(**base).origin_label == ""
     assert ConversationInfo(**base, origin="bogus").origin_label == ""
 
+
+# ---------------------------------------------------------------------------
+# Synchronisation conversation_summaries.db et IDE DB (move_conversation)
+# ---------------------------------------------------------------------------
+def test_move_conversation_updates_sqlite_summaries_db(tmp_path, monkeypatch):
+    """Vérifie la mise à jour de conversation_summaries.db lors du déplacement."""
+    import sqlite3
+    from data_loader import move_conversation, _parse_proto_fields
+
+    parent = tmp_path / ".gemini"
+    ag = parent / "antigravity"
+    ag.mkdir(parents=True)
+    (tmp_path / "DEV").mkdir(parents=True)
+    monkeypatch.setattr("data_loader.get_antigravity_root", lambda: ag)
+    monkeypatch.setattr("data_loader.get_projects_root", lambda: tmp_path / "DEV")
+
+    cid = "11111111-2222-3333-4444-555555555555"
+    db_path = ag / "conversation_summaries.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE conversation_summaries ("
+        "conversation_id TEXT PRIMARY KEY, title TEXT, project_id TEXT, "
+        "workspace_uris TEXT, raw_summary BLOB)"
+    )
+    conn.execute(
+        "INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?)",
+        (cid, "Old Title", "old-project-uuid", '["file:///d:/DEV/OldProject"]', None),
+    )
+    conn.commit()
+    conn.close()
+
+    ok, _ = move_conversation(cid, "NewProjectTarget")
+    assert ok is True
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT project_id, workspace_uris, raw_summary FROM conversation_summaries WHERE conversation_id = ?",
+        (cid,),
+    ).fetchone()
+    conn.close()
+
+    assert row is not None
+    new_pid, new_uris, new_raw = row
+    assert new_pid != "old-project-uuid"
+    assert "NewProjectTarget" in new_uris
+    # Vérifie que raw_summary contient le nouveau project_id et l'URI
+    assert new_raw is not None
+    sub = _parse_proto_fields(new_raw)
+    assert 4 in sub
+    assert sub[4][0][1].decode("utf-8") == new_pid
+
+
+def test_move_conversation_updates_ide_trajectory_and_proto_field4(summaries_tree, tmp_path, monkeypatch):
+    """Vérifie la mise à jour de trajectory_metadata_blob et du champ 4 protobuf."""
+    import sqlite3
+    from data_loader import move_conversation, _parse_proto_fields, _encode_proto_field
+
+    cid = "aaaaaaaa-1111-2222-3333-444444444444"
+    ag, pb = summaries_tree([(cid, "file:///d:/DEV/InitialProject")])
+    (ag / "brain" / cid).mkdir(parents=True)
+
+    # Créer une base conversations/<cid>.db au format IDE
+    ide_conv_db = ag / "conversations" / f"{cid}.db"
+    conn = sqlite3.connect(ide_conv_db)
+    conn.execute("CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB)")
+    # data contient sub1.field1 = workspace uri
+    sub1 = _encode_proto_field(1, 2, b"file:///d:/DEV/InitialProject")
+    data_blob = _encode_proto_field(1, 2, sub1)
+    conn.execute("INSERT INTO trajectory_metadata_blob VALUES ('main', ?)", (data_blob,))
+    conn.commit()
+    conn.close()
+
+    ok, _ = move_conversation(cid, "TargetAlpha")
+    assert ok is True
+
+    # 1. Vérifier champ 4 dans agyhub_summaries_proto.pb
+    top = _parse_proto_fields(pb.read_bytes())
+    f = _parse_proto_fields(top[1][0][1])
+    sub2 = _parse_proto_fields(f[2][0][1])
+    assert 4 in sub2
+    assigned_pid = sub2[4][0][1].decode("utf-8")
+    assert len(assigned_pid) == 36
+
+    # 2. Vérifier trajectory_metadata_blob dans conversations/<cid>.db
+    conn = sqlite3.connect(ide_conv_db)
+    row = conn.execute("SELECT data FROM trajectory_metadata_blob WHERE id='main'").fetchone()
+    conn.close()
+    assert row is not None
+    top_ide = _parse_proto_fields(row[0])
+    sub_ide = _parse_proto_fields(top_ide[1][0][1])
+    assert b"TargetAlpha" in sub_ide[1][0][1]
+
+
+def test_move_conversation_reuses_existing_project_id(tmp_path, monkeypatch):
+    """Si d'autres conversations existent sur le projet cible, le même project_id est réutilisé."""
+    import sqlite3
+    from data_loader import move_conversation
+
+    parent = tmp_path / ".gemini"
+    ag = parent / "antigravity"
+    ag.mkdir(parents=True)
+    (tmp_path / "DEV").mkdir(parents=True)
+    monkeypatch.setattr("data_loader.get_antigravity_root", lambda: ag)
+    monkeypatch.setattr("data_loader.get_projects_root", lambda: tmp_path / "DEV")
+
+    known_pid = "99998888-7777-6666-5555-444433332222"
+    db_path = ag / "conversation_summaries.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE conversation_summaries ("
+        "conversation_id TEXT PRIMARY KEY, title TEXT, project_id TEXT, "
+        "workspace_uris TEXT, raw_summary BLOB)"
+    )
+    # Conversation existante déjà sur SharedProject
+    conn.execute(
+        "INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?)",
+        ("conv-existing-1", "Existing", known_pid, '["file:///d:/DEV/SharedProject"]', None),
+    )
+    # Conversation à déplacer
+    cid_to_move = "conv-to-move-2"
+    conn.execute(
+        "INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?)",
+        (cid_to_move, "To Move", "other-pid", '["file:///d:/DEV/OtherProject"]', None),
+    )
+    conn.commit()
+    conn.close()
+
+    ok, _ = move_conversation(cid_to_move, "SharedProject")
+    assert ok is True
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT project_id FROM conversation_summaries WHERE conversation_id = ?",
+        (cid_to_move,),
+    ).fetchone()
+    conn.close()
+
+    assert row[0] == known_pid
+
+
