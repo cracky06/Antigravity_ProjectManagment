@@ -1363,11 +1363,12 @@ def _find_all_summaries_db() -> list[Path]:
 
 def _resolve_target_project_id_and_uris(
     target_project_name: str, target_project_dir: Path
-) -> tuple[str, str, bytes, str]:
-    """Trouve ou génère le project_id et l'URI canonique pour le projet cible.
-
+) -> tuple[str, str, bytes, bytes, str]:
+    """Résout le project_id existant pour le projet cible, l'URI canonique encodée (%3A),
+    l'URI standard et le json de l'URI.
+    Si aucun project_id n'existe pour ce projet, un nouvel UUID est généré.
     Retourne:
-      (project_id, canonical_uri, canonical_uri_bytes, workspace_uris_json)
+      (project_id, canonical_uri, uri_standard_bytes, uri_encoded_bytes, workspace_uris_json)
     """
     found_pid = None
     found_uri = None
@@ -1418,97 +1419,102 @@ def _resolve_target_project_id_and_uris(
 
     project_id = found_pid if found_pid else str(uuid.uuid4())
 
+    dir_str = str(target_project_dir).replace("\\", "/")
+    uri_standard = f"file:///{dir_str.lstrip('/')}"
+    if len(dir_str) >= 2 and dir_str[1] == ":":
+        drive = dir_str[0].lower()
+        rest = dir_str[2:].lstrip("/")
+        canonical_uri = f"file:///{drive}%3A/{rest}"
+    else:
+        canonical_uri = uri_standard
+
     if found_uri:
         canonical_uri = found_uri
-    else:
-        dir_str = str(target_project_dir).replace("\\", "/")
-        canonical_uri = f"file:///{dir_str.lstrip('/')}"
-        if len(dir_str) >= 2 and dir_str[1] == ":":
-            drive = dir_str[0].lower()
-            rest = dir_str[2:].lstrip("/")
-            canonical_uri = f"file:///{drive}%3A/{rest}"
 
-    canonical_uri_bytes = canonical_uri.encode("utf-8")
+    uri_standard_bytes = uri_standard.encode("utf-8")
+    uri_encoded_bytes = canonical_uri.encode("utf-8")
     workspace_uris_json = json.dumps([canonical_uri])
 
-    return project_id, canonical_uri, canonical_uri_bytes, workspace_uris_json
+    return project_id, canonical_uri, uri_standard_bytes, uri_encoded_bytes, workspace_uris_json
 
 
 def _update_proto_submessage(
-    raw_sub: bytes, new_project_id: str, new_uri_bytes: bytes
+    raw_sub: bytes,
+    new_project_id: str,
+    uri_standard_bytes: bytes,
+    uri_encoded_bytes: bytes,
+    title: str = "",
 ) -> bytes:
-    """Met à jour le champ 4 (project_id) et les champs 9 et 17 (workspace URI)
-    dans un sous-message de summary (submessage 2 de agyhub_summaries_proto ou raw_summary SQLite).
+    """Met à jour les métadonnées de summary pour Antigravity Desktop (titre, workspace, project_id).
+    - sub_f[1] : Titre officiel
+    - sub_f[4] : ID de session (conservé si présent)
+    - sub_f[9] : Sous-message workspace (champs 1 et 2 avec uri_standard_bytes)
+    - sub_f[17] : Sous-message projet & workspace :
+        * champ 1 : sous-message workspace (champs 1 et 2 avec uri_standard_bytes)
+        * champ 3 : uuid du workspace
+        * champ 7 : uri_encoded_bytes (avec %3A)
+        * champ 18 : new_project_id (project_id reconnu par Antigravity Desktop)
     """
     sub_f = _parse_proto_fields(raw_sub) if raw_sub else {}
 
-    # 1. Mise à jour du project_id (champ 4)
+    # Titre
+    if title and (1 not in sub_f or not sub_f[1]):
+        sub_f[1] = [(2, title.encode("utf-8"))]
+
+    # project_id dans champ 4 (rétrocompatibilité) ET dans sous-message 17 champ 18 (Desktop)
     sub_f[4] = [(2, new_project_id.encode("utf-8"))]
 
-    # 2. Mise à jour du workspace dans champ 9
-    if 9 in sub_f:
-        new_sub9 = []
-        for s9_wt, s9_val in sub_f[9]:
-            if isinstance(s9_val, bytes):
-                nested = _parse_proto_fields(s9_val)
-                for k in (1, 2, 7):
-                    if k in nested:
-                        nested[k] = [(2, new_uri_bytes)]
-                rb = bytearray()
-                for nf, nitems in nested.items():
-                    for nw, nv in nitems:
-                        rb.extend(_encode_proto_field(nf, nw, nv))
-                new_sub9.append((s9_wt, bytes(rb)))
-            else:
-                new_sub9.append((s9_wt, s9_val))
-        sub_f[9] = new_sub9
-    else:
-        nested_bytes = (
-            _encode_proto_field(1, 2, new_uri_bytes)
-            + _encode_proto_field(2, 2, new_uri_bytes)
-            + _encode_proto_field(7, 2, new_uri_bytes)
-        )
-        sub_f[9] = [(2, nested_bytes)]
+    # Workspace dans champ 9
+    ws_sub = {
+        1: [(2, uri_standard_bytes)],
+        2: [(2, uri_standard_bytes)],
+    }
+    if 9 in sub_f and sub_f[9] and isinstance(sub_f[9][0][1], bytes):
+        old_ws = _parse_proto_fields(sub_f[9][0][1])
+        if 3 in old_ws:
+            ws_sub[3] = old_ws[3]
+    rb_ws = bytearray()
+    for wf, witems in ws_sub.items():
+        for ww, wv in witems:
+            rb_ws.extend(_encode_proto_field(wf, ww, wv))
+    sub_f[9] = [(2, bytes(rb_ws))]
 
-    # 3. Mise à jour du workspace dans champ 17
-    if 17 in sub_f:
-        new_sub17 = []
-        for s17_wt, s17_val in sub_f[17]:
-            if isinstance(s17_val, bytes):
-                nested = _parse_proto_fields(s17_val)
-                for k in (7, 1):
-                    if k in nested:
-                        nested[k] = [(2, new_uri_bytes)]
-                rb = bytearray()
-                for nf, nitems in nested.items():
-                    for nw, nv in nitems:
-                        rb.extend(_encode_proto_field(nf, nw, nv))
-                new_sub17.append((s17_wt, bytes(rb)))
-            else:
-                new_sub17.append((s17_wt, s17_val))
-        sub_f[17] = new_sub17
-    else:
-        nested17_bytes = (
-            _encode_proto_field(7, 2, new_uri_bytes)
-            + _encode_proto_field(1, 2, new_uri_bytes)
-        )
-        sub_f[17] = [(2, nested17_bytes)]
+    # Association projet dans champ 17
+    f17 = {}
+    if 17 in sub_f and sub_f[17] and isinstance(sub_f[17][0][1], bytes):
+        f17 = _parse_proto_fields(sub_f[17][0][1])
 
-    rb_sub2 = bytearray()
+    f17[1] = [(2, bytes(rb_ws))]
+    if 2 not in f17:
+        f17[2] = [(2, b"\x08\x80\x01\x10\x80\x01")]
+    if 3 not in f17:
+        f17[3] = [(2, str(uuid.uuid4()).encode("utf-8"))]
+    f17[7] = [(2, uri_encoded_bytes)]
+    f17[18] = [(2, new_project_id.encode("utf-8"))]
+
+    rb17 = bytearray()
+    for sf, sitems in f17.items():
+        for sw, sv in sitems:
+            rb17.extend(_encode_proto_field(sf, sw, sv))
+    sub_f[17] = [(2, bytes(rb17))]
+
+    rb_top = bytearray()
     for sf, sitems in sub_f.items():
         for sw, sv in sitems:
-            rb_sub2.extend(_encode_proto_field(sf, sw, sv))
-    return bytes(rb_sub2)
+            rb_top.extend(_encode_proto_field(sf, sw, sv))
+    return bytes(rb_top)
 
 
 def _update_conversation_summaries_db(
     conv_id: str,
     project_id: str,
     workspace_uris_json: str,
-    new_uri_bytes: bytes,
+    uri_standard_bytes: bytes,
+    uri_encoded_bytes: bytes,
     sub_raw_bytes: bytes | None = None,
+    title: str = "",
 ) -> bool:
-    """Met à jour la ligne dans conversation_summaries.db (project_id, workspace_uris, raw_summary)."""
+    """Met à jour ou insère la conversation dans conversation_summaries.db."""
     dbs = _find_all_summaries_db()
     updated_any = False
     for db_path in dbs:
@@ -1517,38 +1523,63 @@ def _update_conversation_summaries_db(
             conn = sqlite3.connect(db_path, timeout=10.0)
             cur = conn.cursor()
             row = cur.execute(
-                "SELECT raw_summary FROM conversation_summaries WHERE conversation_id = ?",
+                "SELECT raw_summary, title FROM conversation_summaries WHERE conversation_id = ?",
                 (conv_id,),
             ).fetchone()
 
             if row is not None:
-                if row[0] and isinstance(row[0], (bytes, bytearray)):
-                    new_raw = _update_proto_submessage(bytes(row[0]), project_id, new_uri_bytes)
+                raw_db = row[0]
+                db_title = row[1] or title
+                if raw_db and isinstance(raw_db, (bytes, bytearray)):
+                    new_raw = _update_proto_submessage(
+                        bytes(raw_db), project_id, uri_standard_bytes, uri_encoded_bytes, db_title
+                    )
                 elif sub_raw_bytes:
-                    new_raw = sub_raw_bytes
+                    new_raw = _update_proto_submessage(
+                        sub_raw_bytes, project_id, uri_standard_bytes, uri_encoded_bytes, db_title
+                    )
                 else:
-                    new_raw = _update_proto_submessage(b"", project_id, new_uri_bytes)
+                    new_raw = _update_proto_submessage(
+                        b"", project_id, uri_standard_bytes, uri_encoded_bytes, db_title
+                    )
 
                 cur.execute(
                     "UPDATE conversation_summaries SET project_id = ?, workspace_uris = ?, raw_summary = ? "
                     "WHERE conversation_id = ?",
                     (project_id, workspace_uris_json, new_raw, conv_id),
                 )
-                conn.commit()
-                updated_any = True
-                logger.debug(
-                    "conversation_summaries.db mis à jour (%s) pour conv %s -> project_id %s",
-                    db_path,
-                    conv_id,
-                    project_id,
+            else:
+                eff_title = title or conv_id[:12]
+                new_raw = sub_raw_bytes if sub_raw_bytes else _update_proto_submessage(
+                    b"", project_id, uri_standard_bytes, uri_encoded_bytes, eff_title
                 )
+                cur.execute(
+                    """INSERT INTO conversation_summaries (
+                        conversation_id, title, preview, step_count, last_modified_time,
+                        workspace_uris, status, source, project_id, agent_name,
+                        parent_conversation_id, nesting_depth, battle_id, winning_conversation_id,
+                        not_fully_idle, killed, last_user_input_time, last_user_input_step_index,
+                        app_data_dir, raw_summary, group_id
+                    ) VALUES (?, ?, '', 0, datetime('now'), ?, '', '', ?, '', '', 0, '', '', 0, 0, datetime('now'), 0, 'antigravity', ?, '')""",
+                    (conv_id, eff_title, workspace_uris_json, project_id, new_raw),
+                )
+            conn.commit()
             conn.close()
+            updated_any = True
+            logger.debug(
+                "conversation_summaries.db (%s) synchronisé pour conv %s -> project_id %s",
+                db_path,
+                conv_id,
+                project_id,
+            )
         except Exception as exc:
             logger.warning("Échec mise à jour %s pour %s : %s", db_path, conv_id, exc)
     return updated_any
 
 
-def _update_ide_sqlite_db_workspace(conv_id: str, new_uri_bytes: bytes) -> bool:
+def _update_ide_sqlite_db_workspace(
+    conv_id: str, uri_standard_bytes: bytes, uri_encoded_bytes: bytes
+) -> bool:
     """Met à jour trajectory_metadata_blob dans conversations/<conv_id>.db si présent."""
     _, antigravity_root, _, _, _ = get_paths()
     gemini_parent = antigravity_root.parent
@@ -1569,24 +1600,62 @@ def _update_ide_sqlite_db_workspace(conv_id: str, new_uri_bytes: bytes) -> bool:
                 top = _parse_proto_fields(row[0])
                 if 1 in top and top[1] and isinstance(top[1][0][1], bytes):
                     sub1 = _parse_proto_fields(top[1][0][1])
-                    sub1[1] = [(2, new_uri_bytes)]
+                    sub1[1] = [(2, uri_standard_bytes)]
+                    sub1[2] = [(2, uri_standard_bytes)]
                     rb_sub1 = bytearray()
                     for sf, sitems in sub1.items():
                         for sw, sv in sitems:
                             rb_sub1.extend(_encode_proto_field(sf, sw, sv))
                     top[1] = [(2, bytes(rb_sub1))]
-                    rb_top = bytearray()
-                    for tf, titems in top.items():
-                        for tw, tv in titems:
-                            rb_top.extend(_encode_proto_field(tf, tw, tv))
-                    conn.execute("UPDATE trajectory_metadata_blob SET data = ? WHERE id='main'", (bytes(rb_top),))
-                    conn.commit()
-                    updated = True
-                    logger.debug("trajectory_metadata_blob mis à jour pour %s dans %s", conv_id, db_path)
+
+                top[7] = [(2, uri_encoded_bytes)]
+
+                rb_top = bytearray()
+                for tf, titems in top.items():
+                    for tw, tv in titems:
+                        rb_top.extend(_encode_proto_field(tf, tw, tv))
+                conn.execute("UPDATE trajectory_metadata_blob SET data = ? WHERE id='main'", (bytes(rb_top),))
+                conn.commit()
+                updated = True
+                logger.debug("trajectory_metadata_blob mis à jour pour %s dans %s", conv_id, db_path)
             conn.close()
         except Exception as exc:
             logger.warning("Échec mise à jour trajectory_metadata_blob %s : %s", db_path, exc)
     return updated
+
+
+def _notify_language_server_refresh() -> bool:
+    """Tente de notifier language_server local pour rafraîchir son cache mémoire."""
+    try:
+        from antigravity_ls_bridge import _discover
+        import ssl
+        import urllib.request
+        notified = False
+        for adir in ("antigravity", "antigravity-ide"):
+            disc = _discover(adir)
+            if not disc:
+                continue
+            token, ports = disc
+            headers = {"Content-Type": "application/json", "x-codeium-csrf-token": token}
+            payload = b"{}"
+            for port in ports:
+                for proto in ("http", "https"):
+                    url = f"{proto}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RefreshContextForIdeAction"
+                    try:
+                        req = urllib.request.Request(url, data=payload, headers=headers)
+                        ssl_ctx = None
+                        if proto == "https":
+                            ssl_ctx = ssl.create_default_context()
+                            ssl_ctx.check_hostname = False
+                            ssl_ctx.verify_mode = ssl.CERT_NONE
+                        with urllib.request.urlopen(req, context=ssl_ctx, timeout=1.5):
+                            notified = True
+                    except Exception:
+                        pass
+        return notified
+    except Exception as exc:
+        logger.debug("_notify_language_server_refresh exception : %s", exc)
+        return False
 
 
 def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str]:
@@ -1600,10 +1669,15 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
     (
         project_id,
         canonical_uri,
-        new_uri_bytes,
+        uri_standard_bytes,
+        uri_encoded_bytes,
         workspace_uris_json,
     ) = _resolve_target_project_id_and_uris(target_project_name, target_project_dir)
     gemini_parent = antigravity_root.parent
+
+    # Récupérer titre existant
+    fallback_title, _ = get_transcript_info(conv_id)
+    conv_title = fallback_title or conv_id[:12]
 
     # 1. Mise à jour de brain/conv_id/echange_IA.md
     brain_p = _find_brain_path(conv_id)
@@ -1643,12 +1717,17 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
             entries = top.get(1, [])
             new_top = {}
             new_entries = []
+            found_in_pb = False
 
             for wt, raw_entry in entries:
                 f = _parse_proto_fields(raw_entry)
                 cid = f.get(1, [('', b'')])[0][1].decode('utf-8', errors='ignore').strip()
-                if cid == conv_id and 2 in f:
-                    new_sub2 = _update_proto_submessage(f[2][0][1], project_id, new_uri_bytes)
+                if cid == conv_id:
+                    found_in_pb = True
+                    old_sub2 = f.get(2, [(2, b'')])[0][1]
+                    new_sub2 = _update_proto_submessage(
+                        old_sub2, project_id, uri_standard_bytes, uri_encoded_bytes, conv_title
+                    )
                     f[2] = [(2, new_sub2)]
                     last_sub2_bytes = new_sub2
 
@@ -1659,6 +1738,22 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
                     new_entries.append((wt, bytes(rb_entry)))
                 else:
                     new_entries.append((wt, raw_entry))
+
+            if not found_in_pb:
+                # Ajout de l'entrée dans le .pb officiel s'il ne la contenait pas
+                new_sub2 = _update_proto_submessage(
+                    b"", project_id, uri_standard_bytes, uri_encoded_bytes, conv_title
+                )
+                last_sub2_bytes = new_sub2
+                new_f = {
+                    1: [(2, conv_id.encode('utf-8'))],
+                    2: [(2, new_sub2)],
+                }
+                rb_entry = bytearray()
+                for ef, eitems in new_f.items():
+                    for ew, ev in eitems:
+                        rb_entry.extend(_encode_proto_field(ef, ew, ev))
+                new_entries.append((2, bytes(rb_entry)))
 
             new_top[1] = new_entries
             for top_f, top_items in top.items():
@@ -1689,8 +1784,7 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
             tmp_path.write_bytes(rebuilt_file)
             os.replace(tmp_path, pb_path)
             logger.debug(
-                "agyhub_summaries_proto.pb réécrit (%s) pour move %s -> %s "
-                "(%d entrées)",
+                "agyhub_summaries_proto.pb réécrit (%s) pour move %s -> %s (%d entrées)",
                 sub, conv_id, target_project_name, n_after,
             )
         except Exception as exc:
@@ -1704,19 +1798,24 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
             except OSError:
                 pass
 
-    # 4. Mise à jour dans conversation_summaries.db
+    # 4. Mise à jour dans conversation_summaries.db (avec INSERT si absent)
     _update_conversation_summaries_db(
         conv_id,
         project_id,
         workspace_uris_json,
-        new_uri_bytes,
+        uri_standard_bytes,
+        uri_encoded_bytes,
         sub_raw_bytes=last_sub2_bytes,
+        title=conv_title,
     )
 
     # 5. Mise à jour dans conversations/<cid>.db (format SQLite IDE)
-    _update_ide_sqlite_db_workspace(conv_id, new_uri_bytes)
+    _update_ide_sqlite_db_workspace(conv_id, uri_standard_bytes, uri_encoded_bytes)
 
-    # 6. Invalider le cache mémoire
+    # 6. Notification language_server en tâche de fond
+    _notify_language_server_refresh()
+
+    # 7. Invalider le cache mémoire
     if conv_id in _CHAT_CACHE:
         del _CHAT_CACHE[conv_id]
 

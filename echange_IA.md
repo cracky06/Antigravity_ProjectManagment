@@ -114,17 +114,24 @@
 - Validation : `259 passed, 1 skipped` avec `.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --tb=short`.
 - Note : la version officielle reste geree uniquement par le fichier `VERSION`.
 
-## 2026-09-21 - [v2.9] Correctif de synchronisation du déplacement de conversation (`move_conversation`)
+## 2026-09-21 - [v2.9] Correctif complet de synchronisation du déplacement de conversation (`move_conversation`)
 
 - **Problème résolu** : Une conversation déplacée via AntigravityManager apparaissait bien sous son nouveau projet dans l'app, mais restait dans son projet d'origine dans Google Antigravity Desktop.
-- **Cause** : Antigravity Desktop s'appuie principalement sur `%USERPROFILE%\.gemini\antigravity\conversation_summaries.db` (table `conversation_summaries`), où les conversations sont regroupées par `project_id` (UUID du projet), et sur le champ 4 (`project_id`) des sous-messages Protobuf (`raw_summary` et `agyhub_summaries_proto.pb`). L'ancienne implémentation ne mettait à jour que les URI dans les champs 9/17 du `.pb` et écrivait un override local `echange_IA.md` sans jamais mettre à jour `conversation_summaries.db` ni le `project_id`.
-- **Modifications apportées (`data_loader.py`)** :
-  - `_resolve_target_project_id_and_uris` : résout ou génère l'UUID `project_id` et l'URI canonique pour le projet cible en réutilisant le `project_id` existant si d'autres conversations sont déjà rattachées au projet cible.
-  - `_update_proto_submessage` : met à jour le champ 4 (`project_id`) ainsi que les sous-messages d'URI 9 et 17, y compris lorsque le sous-message initial est vide.
-  - `_update_conversation_summaries_db` : met à jour atomiquement `project_id`, `workspace_uris` et le BLOB `raw_summary` dans toutes les bases `conversation_summaries.db` détectées, avec sauvegarde de sécurité `.bak`.
-  - `_update_ide_sqlite_db_workspace` : met à jour l'URI de workspace dans la table `trajectory_metadata_blob` (id `'main'`) des bases `conversations/<cid>.db` pour la prise en charge de l'IDE.
+- **Causes identifiées** :
+  1. **Structure Protobuf du résumé** : Dans `agyhub_summaries_proto.pb` et `raw_summary` SQLite, le `project_id` reconnu par l'UI de Google Antigravity Desktop est logé dans le sous-message `17`, champ `18` (`f17[18]`). Le champ `4` est quant à lui un identifiant de session.
+  2. **Absence d'INSERT dans `conversation_summaries.db`** : Pour les conversations issues d'Antigravity IDE ou non encore enregistrées dans la base d'Antigravity Desktop, `move_conversation` tentait un `UPDATE` sans effet. Un `INSERT` automatique est désormais exécuté si la ligne n'existe pas.
+  3. **Table `trajectory_metadata_blob` (bases SQLite de conversation)** : Mise à jour complète de `sub1[1]`, `sub1[2]` et du champ racine `7` (URI encodée avec `%3A`).
+  4. **Cache mémoire de `language_server.exe`** : Notification locale de rafraîchissement via RPC `RefreshContextForIdeAction` et message guidant l'utilisateur pour recharger la fenêtre (`Ctrl+R`) si Desktop est ouvert.
+- **Modifications apportées (`data_loader.py`, `antigravity_manager.py`)** :
+  - `_resolve_target_project_id_and_uris` : résolution précise de l'UUID de projet et des deux formats d'URI (standard `file:///` et canonique `%3A`).
+  - `_update_proto_submessage` : écriture synchronisée du `project_id` dans `f17[18]` (Desktop), du workspace normalisé dans `sub9` et `sub17[1]`, et de l'URI encodée dans `sub17[7]`.
+  - `_update_conversation_summaries_db` : mise à jour avec `INSERT` de secours pour garantir la visibilité dans Antigravity Desktop.
+  - `_update_ide_sqlite_db_workspace` : alignement des champs 1, 2 et 7 de `trajectory_metadata_blob`.
+  - `_notify_language_server_refresh` : signalement au serveur local pour forcer l'invalidation du cache.
+  - `_move_conv_action` : message informatif à l'utilisateur recommandant `Ctrl+R` dans Antigravity Desktop si l'application était ouverte.
 - **Tests unitaires (`tests/test_data_loader.py`)** :
   - `test_move_conversation_updates_sqlite_summaries_db`
   - `test_move_conversation_updates_ide_trajectory_and_proto_field4`
   - `test_move_conversation_reuses_existing_project_id`
-- **Validation** : 262 passed, 1 skipped.
+  - `test_move_conversation_inserts_missing_summary_and_syncs_desktop`
+- **Validation** : 263 passed, 1 skipped. Exécutable `dist/AntigravityManager.exe` recompilé et opérationnel.
