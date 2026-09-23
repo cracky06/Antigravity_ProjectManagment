@@ -135,3 +135,16 @@
   - `test_move_conversation_reuses_existing_project_id`
   - `test_move_conversation_inserts_missing_summary_and_syncs_desktop`
 - **Validation** : 263 passed, 1 skipped. Exécutable `dist/AntigravityManager.exe` recompilé et opérationnel.
+
+## 2026-09-23 - [v2.9] Correctif persistance project_id Desktop (field 18) et préservation du cache IDE (LoadTrajectory)
+
+- **Problèmes résolus** :
+  1. Une conversation déplacée ("Simple Greeting Test") restait classée en "conversations sans projets" dans Antigravity Desktop car son `trajectory_metadata_blob` dans `conversations/<cid>.db` conservait le champ 18 (`project_id`) à `outside-of-project`, écrasant ensuite `conversation_summaries.db`.
+  2. Les discussions d'Antigravity IDE avaient disparu suite à l'appel `RefreshContextForIdeAction` qui vidait le cache mémoire des trajectoires du `language_server`.
+- **Modifications apportées (`data_loader.py`, `tests/test_data_loader.py`)** :
+  - `_update_ide_sqlite_db_workspace` : met désormais à jour le champ 18 (`project_id`) dans `trajectory_metadata_blob` en plus des champs 1, 2 et 7.
+  - `_notify_language_server_refresh` : remplace l'appel destructeur `RefreshContextForIdeAction` par `LoadTrajectory` (`{"cascadeId": conv_id}`) sur `antigravity-ide` pour restaurer et maintenir les trajectoires actives en mémoire.
+  - Réassignation effective et vérifiée de « Simple Greeting Test » vers le `project_id` officiel de `Comfyui-workflows` (`7bbf8d50-96cb-44e3-b96a-c352a575c5d1`).
+  - Rechargement de toutes les trajectoires du workspace dans le `language_server` d'Antigravity IDE.
+  - Test unitaire enrichi pour vérifier la présence et la valeur du champ 18 dans `trajectory_metadata_blob`.
+- **Validation** : 263 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé.

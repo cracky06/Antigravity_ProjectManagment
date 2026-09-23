@@ -370,6 +370,8 @@ def test_move_conversation_updates_ide_trajectory_and_proto_field4(summaries_tre
     top_ide = _parse_proto_fields(row[0])
     sub_ide = _parse_proto_fields(top_ide[1][0][1])
     assert b"TargetAlpha" in sub_ide[1][0][1]
+    assert 18 in top_ide
+    assert top_ide[18][0][1].decode("utf-8") == assigned_pid
 
 
 def test_move_conversation_reuses_existing_project_id(tmp_path, monkeypatch):
