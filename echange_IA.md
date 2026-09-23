@@ -162,3 +162,14 @@
   - `_move_conv_action` : message informatif clarifié confirmant le redémarrage automatique opéré.
   - Nouveaux tests unitaires dédiés : `test_is_antigravity_desktop_running`, `test_restart_antigravity_desktop_if_running`.
 - **Validation** : 267 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé (25.74 Mo).
+
+## 2026-09-23 - [v2.9] Préservation absolue du titre officiel de conversation lors du déplacement
+
+- **Problème résolu** :
+  - `move_conversation` appelait aveuglément `get_transcript_info(conv_id)` pour déterminer le titre à injecter dans protobuf et SQLite.
+  - Cela écrasait le vrai nom officiel de la discussion (ex: `Simple Greeting Test`) par le prompt brut de la première ligne de texte (`test conversation, dit hello`).
+- **Modifications apportées (`data_loader.py`, `tests/test_data_loader.py`)** :
+  - `move_conversation` interroge désormais en priorité `conversation_summaries.db` et le sous-message d'`agyhub_summaries_proto.pb` pour extraire le titre réel officiel.
+  - Le repli sur le texte brut du transcript n'intervient qu'en cas d'absence totale de titre préexistant.
+  - Test unitaire complété pour garantir qu'un titre existant (`Old Title`) reste rigoureusement inchangé après déplacement.
+- **Validation** : 267 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé (25.74 Mo).
