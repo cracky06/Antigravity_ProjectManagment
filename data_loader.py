@@ -1658,7 +1658,8 @@ def _update_ide_sqlite_db_workspace(
 def _notify_language_server_refresh(conv_id: str = "") -> bool:
     """Tente de notifier les language_servers locaux pour synchroniser leur état."""
     try:
-        from antigravity_ls_bridge import _discover
+        from antigravity_ls_bridge import _discover, _discovery_cache
+        _discovery_cache.clear()
         import ssl
         import urllib.request
         notified = False
