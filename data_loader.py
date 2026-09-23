@@ -1374,32 +1374,54 @@ def _resolve_target_project_id_and_uris(
     found_uri = None
     target_clean = target_project_name.lower().strip("/\\")
 
-    # 1. Chercher dans les conversation_summaries.db existants
-    for db_path in _find_all_summaries_db():
-        try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-            rows = conn.execute(
-                "SELECT project_id, workspace_uris FROM conversation_summaries "
-                "WHERE project_id != '' AND project_id != 'outside-of-project'"
-            ).fetchall()
-            conn.close()
-            for pid, uris_str in rows:
-                if not pid or not uris_str:
-                    continue
-                uris_lower = uris_str.lower().replace("\\", "/").replace("%3a", ":")
-                if f"/{target_clean}" in uris_lower or target_clean == uris_lower.rstrip("/").split("/")[-1]:
-                    found_pid = pid
-                    try:
-                        parsed_list = json.loads(uris_str)
-                        if parsed_list and isinstance(parsed_list, list):
-                            found_uri = parsed_list[0]
-                    except Exception:
-                        pass
+    # 0. Chercher prioritairement dans les fichiers officiels config/projects/*.json
+    _, antigravity_root, _, _, _ = get_paths()
+    cfg_projects = antigravity_root.parent / "config" / "projects"
+    if cfg_projects.is_dir():
+        for pjson in cfg_projects.glob("*.json"):
+            try:
+                pdata = json.loads(pjson.read_text(encoding="utf-8"))
+                p_name = pdata.get("name", "").strip().lower()
+                p_id = pdata.get("id", "")
+                if p_name == target_clean or (p_id and target_clean == p_id.lower()):
+                    found_pid = p_id
+                    res_list = pdata.get("projectResources", {}).get("resources", [])
+                    if res_list and isinstance(res_list, list):
+                        gf = res_list[0].get("gitFolder", {})
+                        f_uri = gf.get("folderUri")
+                        if f_uri:
+                            found_uri = f_uri
                     break
-            if found_pid:
-                break
-        except Exception as exc:
-            logger.debug("Erreur lecture %s pour resolve PID : %s", db_path, exc)
+            except Exception:
+                pass
+
+    # 1. Chercher dans les conversation_summaries.db existants si pas encore trouvé
+    if not found_pid:
+        for db_path in _find_all_summaries_db():
+            try:
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                rows = conn.execute(
+                    "SELECT project_id, workspace_uris FROM conversation_summaries "
+                    "WHERE project_id != '' AND project_id != 'outside-of-project'"
+                ).fetchall()
+                conn.close()
+                for pid, uris_str in rows:
+                    if not pid or not uris_str:
+                        continue
+                    uris_lower = uris_str.lower().replace("\\", "/").replace("%3a", ":")
+                    if f"/{target_clean}" in uris_lower or target_clean == uris_lower.rstrip("/").split("/")[-1]:
+                        found_pid = pid
+                        try:
+                            parsed_list = json.loads(uris_str)
+                            if parsed_list and isinstance(parsed_list, list):
+                                found_uri = parsed_list[0]
+                        except Exception:
+                            pass
+                        break
+                if found_pid:
+                    break
+            except Exception as exc:
+                logger.debug("Erreur lecture %s pour resolve PID : %s", db_path, exc)
 
     # 2. Chercher dans agyhub_summaries_proto.pb par scan binaire si pas encore trouvé
     if not found_pid:
@@ -1430,6 +1452,7 @@ def _resolve_target_project_id_and_uris(
 
     if found_uri:
         canonical_uri = found_uri
+        uri_standard = re.sub(r"%3a", ":", found_uri, flags=re.IGNORECASE)
 
     uri_standard_bytes = uri_standard.encode("utf-8")
     uri_encoded_bytes = canonical_uri.encode("utf-8")
