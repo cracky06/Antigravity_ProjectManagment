@@ -254,6 +254,16 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.10": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Intégration de l'icône officielle Codex (assets/codex.png) dans le sélecteur de sources et dans l'arbre des conversations Codex",
+                "Redémarrage contrôlé de Google Antigravity Desktop : après un déplacement de conversation, une boîte de dialogue avec bouton unique « Redémarrer Desktop » permet à l'utilisateur de vérifier ses travaux en cours avant de relancer l'application",
+            ],
+            "🐛 Corrections (fix)": [
+                "Redimensionnement et stabilité du panneau des projets (sidebar) : correction du problème où le panneau gauche se réduisait, se tronquait ou disparaissait lors de l'ouverture de conversations aux titres longs (activation du retour à la ligne wordWrap sur les libellés de chat, attribution des facteurs d'étirement du QSplitter et verrouillage de la largeur minimale de la sidebar à 220px)",
+                "Correction de l'inversion des icônes d'origine Antigravity : l'icône sur fond blanc (antigravity_white.png) est désormais fidèlement attribuée à Antigravity Desktop et l'icône sur fond sombre (antigravity_black.png) à Antigravity IDE",
+            ],
+        },
         "v2.9": {
             "🐛 Corrections (fix)": [
                 "Déplacement de conversation (move) : une discussion déplacée vers un autre projet apparaissait bien sous son nouveau projet dans AntigravityManager mais restait dans son projet d'origine dans Google Antigravity Desktop. La synchronisation met désormais à jour simultanément la base SQLite officielle d'Antigravity Desktop (conversation_summaries.db avec son project_id UUID, workspace_uris et BLOB raw_summary), le champ 4 du fichier agyhub_summaries_proto.pb, et les métadonnées de trajectoire de l'IDE (trajectory_metadata_blob)",

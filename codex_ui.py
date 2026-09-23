@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal, Qt, QUrl
-from PyQt6.QtGui import QColor, QDesktopServices
+from PyQt6.QtGui import QColor, QDesktopServices, QIcon
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QTreeWidgetItem, QMenu
 try:
     import markdown
@@ -180,6 +180,16 @@ class CodexSourceMixin:
     def _populate_codex_tree(self):
         self.tree.clear()
         color = QColor("#a1a1aa" if get_active_theme() == "dark" else "#64748b")
+        codex_icon = QIcon()
+        for base in (Path(__file__).resolve().parent, Path(__file__).resolve().parent / "assets"):
+            for name in ("assets/codex.png", "codex.png"):
+                p = base / name
+                if p.is_file():
+                    codex_icon = QIcon(str(p))
+                    break
+            if not codex_icon.isNull():
+                break
+
         def heading(text):
             item = QTreeWidgetItem([text])
             item.setForeground(0, color)
@@ -187,11 +197,16 @@ class CodexSourceMixin:
             self.tree.addTopLevelItem(item)
             item.setExpanded(True)
             return item
+
         def add_conv(parent, conv):
             label = (conv.title or conv.conv_id)[:65]
             if conv.archived:
                 label += " • Archivée"
-            item = QTreeWidgetItem([f"◉ {label}"])
+            if not codex_icon.isNull():
+                item = QTreeWidgetItem([f"  {label}"])
+                item.setIcon(0, codex_icon)
+            else:
+                item = QTreeWidgetItem([f"◉ {label}"])
             item.setData(0, Qt.ItemDataRole.UserRole, ("codex_conv", conv))
             date = conv.last_dt.strftime("%d/%m/%Y %H:%M") if conv.last_dt else ""
             item.setToolTip(0, f"{conv.title}\n{conv.project or 'Sans projet'} • {date}\n{conv.conv_id}")

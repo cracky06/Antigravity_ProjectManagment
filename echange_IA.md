@@ -173,3 +173,19 @@
   - Le repli sur le texte brut du transcript n'intervient qu'en cas d'absence totale de titre préexistant.
   - Test unitaire complété pour garantir qu'un titre existant (`Old Title`) reste rigoureusement inchangé après déplacement.
 - **Validation** : 267 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé (25.74 Mo).
+
+## 2026-09-23 - [v2.10] Stabilité de la barre latérale, icônes Desktop/IDE/Codex et UX redémarrage Desktop
+
+- **Problèmes résolus & Améliorations** :
+  1. **Panneau des projets (sidebar) instable / tronqué** : Les libellés d'en-tête de chat (`chat_title` et `chat_meta`) n'avaient pas de retour à la ligne (`wordWrap`), ce qui imposait une taille minimale géante dès qu'un titre était long, écrasant la sidebar. De plus, le `QSplitter` n'avait pas de contrainte minimale ni d'interdiction de repliage.
+  2. **Inversion des icônes d'origine Antigravity** : L'icône sur fond blanc (`antigravity_white.png`) correspondait à Antigravity Desktop, et celle sur fond sombre (`antigravity_black.png`) à Antigravity IDE. L'affectation était inversée dans l'arbre.
+  3. **Intégration de l'icône Codex** : Prise en charge de `assets/codex.png` dans le sélecteur de sources (`source_combo`) et dans l'arbre des conversations Codex (`codex_ui.py`).
+  4. **UX du redémarrage Desktop** : Remplacement de l'arrêt instantané et silencieux par une boîte de dialogue avec bouton unique « Redémarrer Desktop », laissant l'utilisateur vérifier ses tâches en cours avant d'agir.
+- **Modifications apportées (`antigravity_manager.py`, `codex_ui.py`, `data_loader.py`, `config.py`, `VERSION`, `FONCTIONNALITES.md`)** :
+  - `sidebar.setMinimumWidth(220)` et `self.splitter.setCollapsible(0, False)` / `setCollapsible(1, False)` / `setStretchFactor(0, 0)` / `setStretchFactor(1, 1)`.
+  - `chat_title.setWordWrap(True)` et `chat_meta.setWordWrap(True)` avec politique `QSizePolicy.Policy.Expanding`.
+  - `_antigravity_desktop_icon()` (`antigravity_white.png`) pour Desktop et `_antigravity_ide_icon()` (`antigravity_black.png`) pour l'IDE.
+  - `_codex_source_icon()` (`assets/codex.png`) pour la source Codex et ses conversations.
+  - Boîte de dialogue modale post-déplacement avec bouton unique « Redémarrer Desktop ».
+  - `VERSION` incrémentée à 2.10 et changelog mis à jour.
+- **Validation** : 267 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé (25.74 Mo).

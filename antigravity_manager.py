@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QStatusBar,
     QHeaderView,
+    QSizePolicy,
 )
 
 from config import (
@@ -74,6 +75,8 @@ from data_loader import (
     ConversationInfo,
     get_paths,
     _find_brain_path,
+    is_antigravity_desktop_running,
+    restart_antigravity_desktop_if_running,
 )
 import search_index
 
@@ -1176,23 +1179,32 @@ def _antigravity_source_icon(dark: bool) -> QIcon:
     return QIcon(str(p)) if p else QIcon()
 
 
-def _apply_conv_item_icon(item: QTreeWidgetItem, c_info, dark: bool):
-    """Assigne l'icône Antigravity à l'item selon l'origine (App vs IDE).
+def _antigravity_desktop_icon() -> QIcon:
+    """Logo Antigravity Desktop (sur fond blanc, assets/antigravity_white.png)."""
+    p = _find_asset("assets/antigravity_white.png", "antigravity_white.png")
+    return QIcon(str(p)) if p else QIcon()
 
-    - origin == 'app' -> logo Antigravity blanc en sombre / noir en clair
-      (_antigravity_source_icon(dark)).
-    - origin in ('ide', 'ide+app') -> logo Antigravity de l'autre couleur
-      (noir en sombre, blanc en clair, _antigravity_source_icon(not dark))
-      pour distinguer immédiatement App et IDE.
+
+def _antigravity_ide_icon() -> QIcon:
+    """Logo Antigravity IDE (sur fond sombre, assets/antigravity_black.png)."""
+    p = _find_asset("assets/antigravity_black.png", "antigravity_black.png")
+    return QIcon(str(p)) if p else QIcon()
+
+
+def _apply_conv_item_icon(item: QTreeWidgetItem, c_info, dark: bool = False):
+    """Assigne l'icône Antigravity à l'item selon l'origine (Desktop vs IDE).
+
+    - origin == 'app' (Desktop) -> logo Antigravity sur fond blanc (antigravity_white.png).
+    - origin in ('ide', 'ide+app') (IDE) -> logo Antigravity sur fond sombre (antigravity_black.png).
     - origin == '' -> pas d'icône (laisser l'emoji 💬 seul).
     """
     orig = getattr(c_info, "origin", "")
     if orig == "app":
-        icon = _antigravity_source_icon(dark)
+        icon = _antigravity_desktop_icon()
         if not icon.isNull():
             item.setIcon(0, icon)
     elif orig in ("ide", "ide+app"):
-        icon = _antigravity_source_icon(not dark)
+        icon = _antigravity_ide_icon()
         if not icon.isNull():
             item.setIcon(0, icon)
 
@@ -1200,6 +1212,12 @@ def _apply_conv_item_icon(item: QTreeWidgetItem, c_info, dark: bool):
 def _claude_source_icon() -> QIcon:
     """Icône Claude (Claude Desktop `assets/claude.png`)."""
     p = _find_asset("assets/claude.png", "claude.png")
+    return QIcon(str(p)) if p else QIcon()
+
+
+def _codex_source_icon() -> QIcon:
+    """Icône Codex (`assets/codex.png`)."""
+    p = _find_asset("assets/codex.png", "codex.png")
     return QIcon(str(p)) if p else QIcon()
 
 
@@ -1374,6 +1392,7 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         # -------------------------------------------------------------
         sidebar = QFrame()
         sidebar.setObjectName("sidebarFrame")
+        sidebar.setMinimumWidth(220)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(10, 12, 10, 8)
         sidebar_layout.setSpacing(8)
@@ -1452,6 +1471,7 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         self.source_combo.setIconSize(QSize(16, 16))
         _ag_icon = _antigravity_source_icon(is_dark)
         _cc_icon = _claude_source_icon()
+        _codex_icon = _codex_source_icon()
         # Repli sur l'emoji si l'asset manque (build sans les svg/png).
         if _ag_icon.isNull():
             self.source_combo.addItem("🌀 Antigravity", "antigravity")
@@ -1461,7 +1481,10 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
             self.source_combo.addItem("✳️ Claude Code / Desktop", "claude_code")
         else:
             self.source_combo.addItem(_cc_icon, "Claude Code / Desktop", "claude_code")
-        self.source_combo.addItem("◉ Codex", "codex")
+        if _codex_icon.isNull():
+            self.source_combo.addItem("◉ Codex", "codex")
+        else:
+            self.source_combo.addItem(_codex_icon, "Codex", "codex")
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         sidebar_layout.addWidget(self.source_combo)
 
@@ -1489,6 +1512,7 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         # 2. VOLET DROIT (Chat Viewer)
         # -------------------------------------------------------------
         chat_container = QFrame()
+        chat_container.setMinimumWidth(320)
         chat_layout = QVBoxLayout(chat_container)
         chat_layout.setContentsMargins(0, 0, 0, 0)
         chat_layout.setSpacing(0)
@@ -1514,7 +1538,9 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
 
         self.chat_title = QLabel("Sélectionnez une conversation")
         self.chat_title.setObjectName("chatTitle")
-        header_top_row.addWidget(self.chat_title)
+        self.chat_title.setWordWrap(True)
+        self.chat_title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        header_top_row.addWidget(self.chat_title, 1)
         header_top_row.addStretch()
 
         self.btn_toggle_raw = QPushButton("<> Source")
@@ -1564,6 +1590,8 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
 
         self.chat_meta = QLabel("Choisissez un projet ou une conversation dans la barre latérale.")
         self.chat_meta.setObjectName("chatMeta")
+        self.chat_meta.setWordWrap(True)
+        self.chat_meta.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         header_vbox.addWidget(self.chat_meta)
 
         chat_layout.addWidget(self.chat_header)
@@ -1662,13 +1690,20 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         _add_shortcut("Shift+F3", self._find_prev)            # occurrence précédente
         _add_shortcut("Escape", self._on_escape)             # effacer recherche / fermer find bar
 
-        # Proportions du splitter : restaurées si valides, sinon 340px sidebar.
+        # Proportions du splitter : non repliable, sidebar fixe et chat extensible.
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+
         saved_sizes = self._ui_state.get("splitter")
         if (
             isinstance(saved_sizes, list)
             and len(saved_sizes) == 2
             and all(isinstance(s, int) and s > 0 for s in saved_sizes)
         ):
+            if saved_sizes[0] < 220:
+                saved_sizes[0] = 340
             self.splitter.setSizes(saved_sizes)
         else:
             self.splitter.setSizes([340, 920])
@@ -3830,10 +3865,26 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _move_conv_action(self, c_info: ConversationInfo, target_project: str):
-        ok, msg = move_conversation(c_info.conv_id, target_project)
+        ok, msg = move_conversation(c_info.conv_id, target_project, restart_desktop=False)
         if ok:
-            QMessageBox.information(self, "Déplacement réussi", msg)
             self.reload_data()
+            if is_antigravity_desktop_running():
+                box = QMessageBox(self)
+                box.setWindowTitle("Déplacement réussi")
+                box.setIcon(QMessageBox.Icon.Information)
+                box.setText(
+                    f"{msg}\n\n"
+                    "🔄 Google Antigravity Desktop est actuellement ouvert.\n"
+                    "Il doit être redémarré pour afficher la conversation sous son nouveau projet.\n\n"
+                    "Vérifiez vos éventuelles tâches en cours sur Desktop, puis cliquez ci-dessous pour le relancer."
+                )
+                btn_restart = box.addButton("Redémarrer Desktop", QMessageBox.ButtonRole.AcceptRole)
+                box.setDefaultButton(btn_restart)
+                box.exec()
+                if box.clickedButton() == btn_restart:
+                    restart_antigravity_desktop_if_running()
+            else:
+                QMessageBox.information(self, "Déplacement réussi", msg)
         else:
             QMessageBox.critical(self, "Erreur", f"Échec du déplacement :\n{msg}")
 
