@@ -319,15 +319,16 @@ def test_move_conversation_updates_sqlite_summaries_db(tmp_path, monkeypatch):
 
     conn = sqlite3.connect(db_path)
     row = conn.execute(
-        "SELECT project_id, workspace_uris, raw_summary FROM conversation_summaries WHERE conversation_id = ?",
+        "SELECT project_id, workspace_uris, raw_summary, title FROM conversation_summaries WHERE conversation_id = ?",
         (cid,),
     ).fetchone()
     conn.close()
 
     assert row is not None
-    new_pid, new_uris, new_raw = row
+    new_pid, new_uris, new_raw, saved_title = row
     assert new_pid != "old-project-uuid"
     assert "NewProjectTarget" in new_uris
+    assert saved_title == "Old Title"
     # Vérifie que raw_summary contient le nouveau project_id et l'URI
     assert new_raw is not None
     sub = _parse_proto_fields(new_raw)
