@@ -1578,7 +1578,10 @@ def _update_conversation_summaries_db(
 
 
 def _update_ide_sqlite_db_workspace(
-    conv_id: str, uri_standard_bytes: bytes, uri_encoded_bytes: bytes
+    conv_id: str,
+    uri_standard_bytes: bytes,
+    uri_encoded_bytes: bytes,
+    project_id: str = "",
 ) -> bool:
     """Met à jour trajectory_metadata_blob dans conversations/<conv_id>.db si présent."""
     _, antigravity_root, _, _, _ = get_paths()
@@ -1609,6 +1612,8 @@ def _update_ide_sqlite_db_workspace(
                     top[1] = [(2, bytes(rb_sub1))]
 
                 top[7] = [(2, uri_encoded_bytes)]
+                if project_id:
+                    top[18] = [(2, project_id.encode("utf-8"))]
 
                 rb_top = bytearray()
                 for tf, titems in top.items():
@@ -1624,34 +1629,56 @@ def _update_ide_sqlite_db_workspace(
     return updated
 
 
-def _notify_language_server_refresh() -> bool:
-    """Tente de notifier language_server local pour rafraîchir son cache mémoire."""
+def _notify_language_server_refresh(conv_id: str = "") -> bool:
+    """Tente de notifier les language_servers locaux pour synchroniser leur état."""
     try:
         from antigravity_ls_bridge import _discover
         import ssl
         import urllib.request
         notified = False
-        for adir in ("antigravity", "antigravity-ide"):
-            disc = _discover(adir)
-            if not disc:
-                continue
-            token, ports = disc
-            headers = {"Content-Type": "application/json", "x-codeium-csrf-token": token}
-            payload = b"{}"
-            for port in ports:
-                for proto in ("http", "https"):
-                    url = f"{proto}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RefreshContextForIdeAction"
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+
+        # 1. Pour antigravity-ide : recharger la trajectoire déplacée via LoadTrajectory
+        # Ne PAS appeler RefreshContextForIdeAction qui vide le cache mémoire des trajectoires
+        if conv_id:
+            disc_ide = _discover("antigravity-ide")
+            if disc_ide:
+                token, ports = disc_ide
+                headers = {"Content-Type": "application/json", "x-codeium-csrf-token": token}
+                payload = json.dumps({"cascadeId": conv_id}).encode("utf-8")
+                for port in ports:
+                    url = f"https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/LoadTrajectory"
                     try:
                         req = urllib.request.Request(url, data=payload, headers=headers)
-                        ssl_ctx = None
-                        if proto == "https":
-                            ssl_ctx = ssl.create_default_context()
-                            ssl_ctx.check_hostname = False
-                            ssl_ctx.verify_mode = ssl.CERT_NONE
                         with urllib.request.urlopen(req, context=ssl_ctx, timeout=1.5):
                             notified = True
                     except Exception:
                         pass
+
+        # 2. Pour antigravity (Desktop standalone) : rechargement de trajectoire et rafraîchissement
+        disc_desk = _discover("antigravity")
+        if disc_desk:
+            token, ports = disc_desk
+            headers = {"Content-Type": "application/json", "x-codeium-csrf-token": token}
+            for port in ports:
+                if conv_id:
+                    url_load = f"https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/LoadTrajectory"
+                    try:
+                        req = urllib.request.Request(url_load, data=json.dumps({"cascadeId": conv_id}).encode("utf-8"), headers=headers)
+                        with urllib.request.urlopen(req, context=ssl_ctx, timeout=1.5):
+                            notified = True
+                    except Exception:
+                        pass
+                url_ref = f"https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RefreshContextForIdeAction"
+                try:
+                    req = urllib.request.Request(url_ref, data=b"{}", headers=headers)
+                    with urllib.request.urlopen(req, context=ssl_ctx, timeout=1.5):
+                        notified = True
+                except Exception:
+                    pass
+
         return notified
     except Exception as exc:
         logger.debug("_notify_language_server_refresh exception : %s", exc)
@@ -1809,11 +1836,13 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
         title=conv_title,
     )
 
-    # 5. Mise à jour dans conversations/<cid>.db (format SQLite IDE)
-    _update_ide_sqlite_db_workspace(conv_id, uri_standard_bytes, uri_encoded_bytes)
+    # 5. Mise à jour dans conversations/<cid>.db (format SQLite IDE et Desktop)
+    _update_ide_sqlite_db_workspace(
+        conv_id, uri_standard_bytes, uri_encoded_bytes, project_id=project_id
+    )
 
     # 6. Notification language_server en tâche de fond
-    _notify_language_server_refresh()
+    _notify_language_server_refresh(conv_id=conv_id)
 
     # 7. Invalider le cache mémoire
     if conv_id in _CHAT_CACHE:
