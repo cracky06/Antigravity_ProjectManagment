@@ -1760,7 +1760,7 @@ def restart_antigravity_desktop_if_running() -> bool:
 
 
 def move_conversation(
-    conv_id: str, target_project_name: str, restart_desktop: bool = True
+    conv_id: str, target_project_name: str, restart_desktop: bool = False
 ) -> tuple[bool, str]:
     """Déplace et réassigne officiellement une conversation vers un projet cible.
     Met à jour echange_IA.md, les transcripts, agyhub_summaries_proto.pb,

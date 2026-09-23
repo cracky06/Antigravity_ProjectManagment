@@ -52,10 +52,16 @@ function Remove-BuildDirectory {
     for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
         if (-not (Test-Path -Path $Path)) { return }
         try {
+            Get-ChildItem -Path $Path -Force -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
             return
         }
         catch {
+            $Remaining = Get-ChildItem -Path $Path -Force -ErrorAction SilentlyContinue
+            if ($null -eq $Remaining -or $Remaining.Count -eq 0) {
+                Write-Host "  '$Path' est vide mais verrouille par l'Explorateur/systeme. Nettoyage poursuivi." -ForegroundColor DarkYellow
+                return
+            }
             if ($Attempt -eq $MaxAttempts) {
                 Write-Host "  ECHEC : '$Path' reste verrouille apres $MaxAttempts tentatives." -ForegroundColor Red
                 Write-Host "  Fermez toute fenetre de l'Explorateur ouverte dans ce dossier, puis relancez." -ForegroundColor Red

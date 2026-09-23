@@ -28,6 +28,7 @@ a = Analysis(
         ('assets/antigravity_black.png', 'assets'),
         ('assets/antigravity_white.png', 'assets'),
         ('assets/claude.png', 'assets'),
+        ('assets/codex.png', 'assets'),
         ('VERSION', '.'),
     ],
     # QtSvg : jamais importé dans le code Python, mais requis pour que QIcon
