@@ -1601,15 +1601,18 @@ def _update_ide_sqlite_db_workspace(
             row = conn.execute("SELECT data FROM trajectory_metadata_blob WHERE id='main'").fetchone()
             if row and row[0]:
                 top = _parse_proto_fields(row[0])
+                sub1 = {}
                 if 1 in top and top[1] and isinstance(top[1][0][1], bytes):
                     sub1 = _parse_proto_fields(top[1][0][1])
-                    sub1[1] = [(2, uri_standard_bytes)]
-                    sub1[2] = [(2, uri_standard_bytes)]
-                    rb_sub1 = bytearray()
-                    for sf, sitems in sub1.items():
-                        for sw, sv in sitems:
-                            rb_sub1.extend(_encode_proto_field(sf, sw, sv))
-                    top[1] = [(2, bytes(rb_sub1))]
+                sub1[1] = [(2, uri_standard_bytes)]
+                sub1[2] = [(2, uri_standard_bytes)]
+                if 3 not in sub1:
+                    sub1[3] = [(2, b"")]
+                rb_sub1 = bytearray()
+                for sf, sitems in sub1.items():
+                    for sw, sv in sitems:
+                        rb_sub1.extend(_encode_proto_field(sf, sw, sv))
+                top[1] = [(2, bytes(rb_sub1))]
 
                 top[7] = [(2, uri_encoded_bytes)]
                 if project_id:
@@ -1657,7 +1660,7 @@ def _notify_language_server_refresh(conv_id: str = "") -> bool:
                     except Exception:
                         pass
 
-        # 2. Pour antigravity (Desktop standalone) : rechargement de trajectoire et rafraîchissement
+        # 2. Pour antigravity (Desktop standalone) : recharger la trajectoire déplacée via LoadTrajectory
         disc_desk = _discover("antigravity")
         if disc_desk:
             token, ports = disc_desk
@@ -1671,13 +1674,6 @@ def _notify_language_server_refresh(conv_id: str = "") -> bool:
                             notified = True
                     except Exception:
                         pass
-                url_ref = f"https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RefreshContextForIdeAction"
-                try:
-                    req = urllib.request.Request(url_ref, data=b"{}", headers=headers)
-                    with urllib.request.urlopen(req, context=ssl_ctx, timeout=1.5):
-                        notified = True
-                except Exception:
-                    pass
 
         return notified
     except Exception as exc:
