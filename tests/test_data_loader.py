@@ -3,12 +3,15 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import sqlite3
 import pytest
 
 from data_loader import (
     _decode_varint,
+    _encode_proto_field,
     _parse_proto_fields,
     _clean_path_string,
+    _update_ide_sqlite_db_workspace,
     workspace_to_project,
     relative_time,
     load_chat_messages,
@@ -475,6 +478,55 @@ def test_move_conversation_inserts_missing_summary_and_syncs_desktop(tmp_path, m
     assert sub17[18][0][1].decode("utf-8") == pid
     assert 7 in sub17
     assert "DesktopTargetProject" in sub17[7][0][1].decode("utf-8")
+
+
+def test_update_ide_sqlite_db_workspace_injects_field_1_when_missing(tmp_path, monkeypatch):
+    """Vérifie que _update_ide_sqlite_db_workspace injecte le champ 1 (workspace)
+    même si la conversation a été créée hors projet et n'avait aucun champ 1."""
+    antigravity_dir = tmp_path / "antigravity"
+    convs_dir = antigravity_dir / "conversations"
+    convs_dir.mkdir(parents=True)
+    monkeypatch.setattr("data_loader.get_antigravity_root", lambda: antigravity_dir)
+
+    cid = "test-conv-no-field-1-uuid"
+    db_path = convs_dir / f"{cid}.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB)")
+
+    # Créer un blob sans champ 1 (comme les conversations créées hors projet)
+    top_initial = {
+        6: [(2, cid.encode("utf-8"))],
+        18: [(2, b"outside-of-project")],
+    }
+    rb = bytearray()
+    for f, items in top_initial.items():
+        for w, v in items:
+            rb.extend(_encode_proto_field(f, w, v))
+    conn.execute("INSERT INTO trajectory_metadata_blob VALUES ('main', ?)", (bytes(rb),))
+    conn.commit()
+    conn.close()
+
+    uri_std = b"file:///e:/Dev/TargetProj"
+    uri_enc = b"file:///e%3A/Dev/TargetProj"
+    pid = "target-proj-uuid-1234"
+
+    ok = _update_ide_sqlite_db_workspace(cid, uri_std, uri_enc, pid)
+    assert ok is True
+
+    # Vérifier que le champ 1 a été correctement créé et injecté
+    conn = sqlite3.connect(db_path)
+    r = conn.execute("SELECT data FROM trajectory_metadata_blob WHERE id='main'").fetchone()
+    conn.close()
+    assert r and r[0]
+
+    top_after = _parse_proto_fields(r[0])
+    assert 1 in top_after, "Le champ 1 (workspace) doit être injecté"
+    sub1 = _parse_proto_fields(top_after[1][0][1])
+    assert sub1[1][0][1] == uri_std
+    assert sub1[2][0][1] == uri_std
+    assert top_after[18][0][1] == pid.encode("utf-8")
+    assert top_after[7][0][1] == uri_enc
+
 
 
 
