@@ -12,6 +12,7 @@ from data_loader import (
     _parse_proto_fields,
     _clean_path_string,
     _update_ide_sqlite_db_workspace,
+    _resolve_target_project_id_and_uris,
     workspace_to_project,
     relative_time,
     load_chat_messages,
@@ -528,5 +529,39 @@ def test_update_ide_sqlite_db_workspace_injects_field_1_when_missing(tmp_path, m
     assert top_after[7][0][1] == uri_enc
 
 
+def test_resolve_target_project_id_reads_config_projects(tmp_path, monkeypatch):
+    """Vérifie que _resolve_target_project_id_and_uris lit prioritairement
+    les fichiers officiels .gemini/config/projects/*.json."""
+    antigravity_dir = tmp_path / "antigravity"
+    antigravity_dir.mkdir(parents=True)
+    config_proj_dir = tmp_path / "config" / "projects"
+    config_proj_dir.mkdir(parents=True)
+    monkeypatch.setattr("data_loader.get_antigravity_root", lambda: antigravity_dir)
 
+    # Créer un faux projet dans config/projects
+    p_uuid = "proj-uuid-official-9999"
+    p_json = {
+        "id": p_uuid,
+        "name": "MyOfficialProject",
+        "projectResources": {
+            "resources": [
+                {
+                    "gitFolder": {
+                        "folderUri": "file:///c%3A/Custom/Path/To/MyOfficialProject"
+                    }
+                }
+            ]
+        }
+    }
+    (config_proj_dir / f"{p_uuid}.json").write_text(json.dumps(p_json), encoding="utf-8")
 
+    dummy_target_dir = Path("E:/Dev/MyOfficialProject")
+    pid, can_uri, uri_std_b, uri_enc_b, uris_json = _resolve_target_project_id_and_uris(
+        "MyOfficialProject", dummy_target_dir
+    )
+
+    assert pid == p_uuid
+    assert can_uri == "file:///c%3A/Custom/Path/To/MyOfficialProject"
+    assert uri_enc_b == b"file:///c%3A/Custom/Path/To/MyOfficialProject"
+    assert uri_std_b == b"file:///c:/Custom/Path/To/MyOfficialProject"
+    assert "file:///c%3A/Custom/Path/To/MyOfficialProject" in uris_json
