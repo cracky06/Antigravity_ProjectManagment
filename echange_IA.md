@@ -148,3 +148,17 @@
   - Rechargement de toutes les trajectoires du workspace dans le `language_server` d'Antigravity IDE.
   - Test unitaire enrichi pour vérifier la présence et la valeur du champ 18 dans `trajectory_metadata_blob`.
 - **Validation** : 263 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé.
+
+## 2026-09-23 - [v2.9] Redémarrage automatique d'Antigravity Desktop lors du déplacement de conversation
+
+- **Contexte & Problème résolu** :
+  - Antigravity Desktop conserve les discussions consultées dans la mémoire RAM de son processus `language_server.exe`.
+  - Un simple `Ctrl+R` dans Desktop rafraîchit l'interface Electron sans purger la RAM du moteur.
+  - La fermeture et réouverture complète de Desktop était requise pour que le moteur relise les bases SQLite et protobuf mises à jour.
+- **Modifications apportées (`data_loader.py`, `antigravity_manager.py`, `tests/test_data_loader.py`)** :
+  - `is_antigravity_desktop_running()` : détection fiable du processus `Antigravity.exe` (sans impacter `Antigravity IDE.exe`).
+  - `restart_antigravity_desktop_if_running()` : arrêt propre d'`Antigravity.exe` et `language_server.exe`, temporisation de 1 seconde, puis relance automatique via `%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe`.
+  - Intégration transparente à la fin de `move_conversation()` (protégé contre l'exécution intempestive en phase de tests unitaires via `PYTEST_CURRENT_TEST`).
+  - `_move_conv_action` : message informatif clarifié confirmant le redémarrage automatique opéré.
+  - Nouveaux tests unitaires dédiés : `test_is_antigravity_desktop_running`, `test_restart_antigravity_desktop_if_running`.
+- **Validation** : 267 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé (25.74 Mo).
