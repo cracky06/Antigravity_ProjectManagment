@@ -1778,9 +1778,27 @@ def move_conversation(
     ) = _resolve_target_project_id_and_uris(target_project_name, target_project_dir)
     gemini_parent = antigravity_root.parent
 
-    # Récupérer titre existant
-    fallback_title, _ = get_transcript_info(conv_id)
-    conv_title = fallback_title or conv_id[:12]
+    # Récupérer titre existant officiel en priorité
+    existing_title = ""
+    for sdb in _find_all_summaries_db():
+        try:
+            conn = sqlite3.connect(sdb, timeout=2.0)
+            r = conn.execute(
+                "SELECT title FROM conversation_summaries WHERE conversation_id = ?",
+                (conv_id,),
+            ).fetchone()
+            conn.close()
+            if r and r[0] and r[0].strip() and r[0].strip() != conv_id[:12]:
+                existing_title = r[0].strip()
+                break
+        except Exception:
+            pass
+
+    if not existing_title:
+        fallback_title, _ = get_transcript_info(conv_id)
+        existing_title = fallback_title or conv_id[:12]
+
+    conv_title = existing_title
 
     # 1. Mise à jour de brain/conv_id/echange_IA.md
     brain_p = _find_brain_path(conv_id)
@@ -1828,8 +1846,18 @@ def move_conversation(
                 if cid == conv_id:
                     found_in_pb = True
                     old_sub2 = f.get(2, [(2, b'')])[0][1]
+                    eff_title = conv_title
+                    if old_sub2:
+                        old_sub_f = _parse_proto_fields(old_sub2)
+                        if 1 in old_sub_f and old_sub_f[1]:
+                            try:
+                                pb_t = old_sub_f[1][0][1].decode('utf-8', errors='ignore').strip()
+                                if pb_t and pb_t != conv_id[:12]:
+                                    eff_title = pb_t
+                            except Exception:
+                                pass
                     new_sub2 = _update_proto_submessage(
-                        old_sub2, project_id, uri_standard_bytes, uri_encoded_bytes, conv_title
+                        old_sub2, project_id, uri_standard_bytes, uri_encoded_bytes, eff_title
                     )
                     f[2] = [(2, new_sub2)]
                     last_sub2_bytes = new_sub2
