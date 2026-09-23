@@ -565,3 +565,63 @@ def test_resolve_target_project_id_reads_config_projects(tmp_path, monkeypatch):
     assert uri_enc_b == b"file:///c%3A/Custom/Path/To/MyOfficialProject"
     assert uri_std_b == b"file:///c:/Custom/Path/To/MyOfficialProject"
     assert "file:///c%3A/Custom/Path/To/MyOfficialProject" in uris_json
+
+
+def test_is_antigravity_desktop_running(monkeypatch):
+    """Vérifie la détection du processus Antigravity Desktop."""
+    import subprocess
+    from data_loader import is_antigravity_desktop_running
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout='"Antigravity.exe","1234","Console","1","50000 K"\n'
+        ),
+    )
+    assert is_antigravity_desktop_running() is True
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout='INFO: No tasks running\n'
+        ),
+    )
+    assert is_antigravity_desktop_running() is False
+
+
+def test_restart_antigravity_desktop_if_running(monkeypatch, tmp_path):
+    """Vérifie la séquence de fermeture et réouverture de Desktop."""
+    import os
+    import subprocess
+    from data_loader import restart_antigravity_desktop_if_running
+
+    # Simuler Desktop non actif
+    monkeypatch.setattr("data_loader.is_antigravity_desktop_running", lambda: False)
+    assert restart_antigravity_desktop_if_running() is False
+
+    # Simuler Desktop actif avec faux exe
+    monkeypatch.setattr("data_loader.is_antigravity_desktop_running", lambda: True)
+    fake_exe = tmp_path / "Programs" / "Antigravity" / "Antigravity.exe"
+    fake_exe.parent.mkdir(parents=True, exist_ok=True)
+    fake_exe.write_text("dummy", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+    killed = []
+    started = []
+
+    def mock_run(args, **kwargs):
+        killed.append(args)
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(os, "startfile", lambda p: started.append(p))
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    ok = restart_antigravity_desktop_if_running()
+    assert ok is True
+    assert len(killed) == 2  # Antigravity.exe et language_server.exe
+    assert len(started) == 1
+    assert started[0] == str(fake_exe)
+

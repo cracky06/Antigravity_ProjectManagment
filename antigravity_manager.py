@@ -3832,12 +3832,7 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
     def _move_conv_action(self, c_info: ConversationInfo, target_project: str):
         ok, msg = move_conversation(c_info.conv_id, target_project)
         if ok:
-            info_msg = (
-                f"{msg}\n\n"
-                "💡 Note : Si Google Antigravity Desktop est actuellement ouvert,\n"
-                "rechargez sa fenêtre (Ctrl+R) pour voir le déplacement immédiatement."
-            )
-            QMessageBox.information(self, "Déplacement réussi", info_msg)
+            QMessageBox.information(self, "Déplacement réussi", msg)
             self.reload_data()
         else:
             QMessageBox.critical(self, "Erreur", f"Échec du déplacement :\n{msg}")

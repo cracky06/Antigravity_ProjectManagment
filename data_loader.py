@@ -11,6 +11,8 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
+import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -1705,7 +1707,61 @@ def _notify_language_server_refresh(conv_id: str = "") -> bool:
         return False
 
 
-def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str]:
+def is_antigravity_desktop_running() -> bool:
+    """Vérifie si le processus Antigravity Desktop (Antigravity.exe) est actif."""
+    try:
+        res = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq Antigravity.exe", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return "Antigravity.exe" in (res.stdout or "")
+    except Exception:
+        return False
+
+
+def restart_antigravity_desktop_if_running() -> bool:
+    """Si Antigravity Desktop est lancé, le ferme puis le relance pour recharger les trajectoires."""
+    if not is_antigravity_desktop_running():
+        return False
+    try:
+        local_app = os.environ.get("LOCALAPPDATA", "")
+        exe_path = Path(local_app) / "Programs" / "Antigravity" / "Antigravity.exe"
+        if not exe_path.is_file():
+            prog_files = os.environ.get("ProgramFiles", "")
+            alt_path = Path(prog_files) / "Antigravity" / "Antigravity.exe"
+            if alt_path.is_file():
+                exe_path = alt_path
+            else:
+                logger.warning("Antigravity.exe introuvable pour redémarrage.")
+                return False
+
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "Antigravity.exe"],
+            capture_output=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "language_server.exe"],
+            capture_output=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        time.sleep(1.0)
+        os.startfile(str(exe_path))
+        logger.info("Antigravity Desktop redémarré avec succès : %s", exe_path)
+        return True
+    except Exception as exc:
+        logger.warning("Erreur redémarrage Antigravity Desktop : %s", exc)
+        return False
+
+
+def move_conversation(
+    conv_id: str, target_project_name: str, restart_desktop: bool = True
+) -> tuple[bool, str]:
     """Déplace et réassigne officiellement une conversation vers un projet cible.
     Met à jour echange_IA.md, les transcripts, agyhub_summaries_proto.pb,
     conversation_summaries.db et les bases conversations/<cid>.db pour qu'Antigravity
@@ -1868,7 +1924,13 @@ def move_conversation(conv_id: str, target_project_name: str) -> tuple[bool, str
     if conv_id in _CHAT_CACHE:
         del _CHAT_CACHE[conv_id]
 
-    return True, f"Conversation déplacée vers « {target_project_name} » avec succès."
+    # 8. Redémarrage automatique d'Antigravity Desktop si actif
+    msg = f"Conversation déplacée vers « {target_project_name} » avec succès."
+    if restart_desktop and "PYTEST_CURRENT_TEST" not in os.environ:
+        if restart_antigravity_desktop_if_running():
+            msg += "\n\n🔄 Google Antigravity Desktop a été redémarré automatiquement pour appliquer le changement."
+
+    return True, msg
 
 
 # ---------------------------------------------------------------------------
