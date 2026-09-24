@@ -100,3 +100,81 @@ def test_find_asset_resolves_and_missing(qapp):
     assert _find_asset("assets/icon.png") is not None
     assert _find_asset("assets/nexiste-pas.xyz") is None
 
+
+def test_chat_tree_widget_target_resolution(qapp):
+    """Vérifie la détection du projet cible sur un dossier ou une conversation enfant."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QTreeWidgetItem
+    from antigravity_manager import _ChatTreeWidget
+    from data_loader import ConversationInfo
+
+    tree = _ChatTreeWidget()
+    p_item = QTreeWidgetItem(["📁 ProjA"])
+    p_item.setData(0, Qt.ItemDataRole.UserRole, ("project", "ProjA", []))
+    tree.addTopLevelItem(p_item)
+
+    c_info = ConversationInfo("cid-1", "Discussion 1", "ProjA", "", None)
+    c_item = QTreeWidgetItem(["💬 Discussion 1"])
+    c_item.setData(0, Qt.ItemDataRole.UserRole, ("conv", c_info))
+    p_item.addChild(c_item)
+
+    # Résolution sur le dossier
+    assert tree._resolve_target_project(p_item) == "ProjA"
+    # Résolution sur une conversation enfant
+    assert tree._resolve_target_project(c_item) == "ProjA"
+    # Résolution sur un élément nul ou sans métadonnée
+    assert tree._resolve_target_project(None) is None
+    orphan_header = QTreeWidgetItem(["HORS PROJET"])
+    assert tree._resolve_target_project(orphan_header) is None
+
+
+def test_tree_state_capture_and_restore(qapp):
+    """Vérifie la mémorisation et la réouverture automatique des dossiers lors d'un rechargement."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QTreeWidgetItemIterator
+    from antigravity_manager import AntigravityManagerWindow
+
+    win = AntigravityManagerWindow()
+    # Trouver le premier dossier projet et le déplier
+    target_project_name = None
+    it = QTreeWidgetItemIterator(win.tree)
+    while it.value():
+        item = it.value()
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data and data[0] == "project" and item.childCount() > 0:
+            target_project_name = data[1]
+            item.setExpanded(True)
+            break
+        it += 1
+
+    if target_project_name:
+        expanded, _ = win._capture_tree_state()
+        assert target_project_name in expanded
+
+        # Replier manuellement
+        it = QTreeWidgetItemIterator(win.tree)
+        while it.value():
+            item = it.value()
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data[0] == "project" and data[1] == target_project_name:
+                item.setExpanded(False)
+                break
+            it += 1
+
+        # Restaurer
+        win._restore_tree_state(expanded, None)
+
+        # Vérifier qu'il est redéplié
+        is_re_expanded = False
+        it = QTreeWidgetItemIterator(win.tree)
+        while it.value():
+            item = it.value()
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data[0] == "project" and data[1] == target_project_name:
+                is_re_expanded = item.isExpanded()
+                break
+            it += 1
+        assert is_re_expanded is True
+
+    win.close()
+

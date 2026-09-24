@@ -14,7 +14,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QObject, QRunnable, QThreadPool, QByteArray, QFileSystemWatcher, pyqtSignal as _Signal
-from PyQt6.QtGui import QIcon, QFont, QColor, QDesktopServices, QAction, QKeySequence, QShortcut, QTextCursor, QPixmap
+from PyQt6.QtGui import (
+    QIcon,
+    QFont,
+    QColor,
+    QDesktopServices,
+    QAction,
+    QKeySequence,
+    QShortcut,
+    QTextCursor,
+    QPixmap,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -25,6 +38,7 @@ from PyQt6.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QTreeWidgetItemIterator,
+    QAbstractItemView,
     QTextBrowser,
     QLabel,
     QPushButton,
@@ -497,6 +511,93 @@ class _FindLineEdit(QLineEdit):
             self.escape_pressed.emit()
         else:
             super().keyPressEvent(event)
+
+
+# =====================================================================
+# QTreeWidget personnalisé pour le Drag & Drop des conversations
+# =====================================================================
+class _ChatTreeWidget(QTreeWidget):
+    """QTreeWidget avec Drag & Drop des conversations Antigravity vers un projet cible."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+
+    def _resolve_target_project(self, target_item: QTreeWidgetItem | None) -> str | None:
+        """Détermine le nom du projet sous le curseur de drop."""
+        if not target_item:
+            return None
+        tdata = target_item.data(0, Qt.ItemDataRole.UserRole)
+        if not tdata:
+            return None
+        dtype = tdata[0]
+        if dtype == "project":
+            return tdata[1]  # nom du projet
+        elif dtype == "conv":
+            conv_info = tdata[1]
+            return conv_info.project if getattr(conv_info, "project", None) else None
+        return None
+
+    def startDrag(self, supportedActions: Qt.DropAction) -> None:
+        item = self.currentItem()
+        if item:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data[0] == "conv":
+                super().startDrag(supportedActions)
+                return
+        # Les dossiers et autres sources ne sont pas draggables
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        item = self.currentItem()
+        if item:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data[0] == "conv":
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        item = self.currentItem()
+        if not item:
+            event.ignore()
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or data[0] != "conv":
+            event.ignore()
+            return
+        c_info = data[1]
+
+        target_item = self.itemAt(event.position().toPoint())
+        target_project = self._resolve_target_project(target_item)
+        if target_project and target_project != c_info.project:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        item = self.currentItem()
+        if not item:
+            event.ignore()
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or data[0] != "conv":
+            event.ignore()
+            return
+        c_info = data[1]
+
+        target_item = self.itemAt(event.position().toPoint())
+        target_project = self._resolve_target_project(target_item)
+        if target_project and target_project != c_info.project:
+            event.acceptProposedAction()
+            win = self.window()
+            if hasattr(win, "_move_conv_action"):
+                win._move_conv_action(c_info, target_project, confirm=True)
+        else:
+            event.ignore()
 
 
 # =====================================================================
@@ -1495,8 +1596,8 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         self.project_filter_combo.currentIndexChanged.connect(self._on_filter_changed)
         sidebar_layout.addWidget(self.project_filter_combo)
 
-        # Tree Widget natif accéléré matériellement
-        self.tree = QTreeWidget()
+        # Tree Widget natif accéléré matériellement avec Drag & Drop
+        self.tree = _ChatTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(18)
         self.tree.setAnimated(True)
@@ -1809,10 +1910,71 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         self.project_filter_combo.setCurrentIndex(idx)
         self.project_filter_combo.blockSignals(False)
 
+    def _capture_tree_state(self) -> tuple[set[str], str | None]:
+        """Capture les noms des projets dépliés et l'ID de la conversation sélectionnée."""
+        expanded_projects: set[str] = set()
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data[0] in ("project", "claude_project", "codex_project"):
+                if item.isExpanded():
+                    expanded_projects.add(data[1])
+            it += 1
+
+        if getattr(self, "_target_expand_project", None):
+            expanded_projects.add(self._target_expand_project)
+            self._target_expand_project = None
+
+        selected_id = None
+        if self._active_source == "codex" and getattr(self, "selected_codex_conv", None):
+            selected_id = getattr(self.selected_codex_conv, "conv_id", None)
+        elif self._active_source == "claude_code" and getattr(self, "selected_claude_conv", None):
+            selected_id = getattr(self.selected_claude_conv, "conv_id", None)
+        elif getattr(self, "selected_conv", None):
+            selected_id = getattr(self.selected_conv, "conv_id", None)
+
+        return expanded_projects, selected_id
+
+    def _restore_tree_state(self, expanded_projects: set[str], target_conv_id: str | None):
+        """Restaure les dossiers ouverts, déplie le dossier parent de la conversation active et la sélectionne."""
+        target_item = None
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            item = it.value()
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data:
+                dtype = data[0]
+                if dtype in ("project", "claude_project", "codex_project"):
+                    proj_name = data[1]
+                    if proj_name in expanded_projects:
+                        item.setExpanded(True)
+                elif dtype in ("conv", "claude_conv", "codex_conv") and target_conv_id:
+                    conv = data[1]
+                    cid = getattr(conv, "conv_id", "")
+                    if cid == target_conv_id and target_item is None:
+                        target_item = item
+            it += 1
+
+        if target_item:
+            # S'assurer que tous les parents (dossier projet, section) sont dépliés
+            parent = target_item.parent()
+            while parent:
+                parent.setExpanded(True)
+                parent = parent.parent()
+            self.tree.blockSignals(True)
+            self.tree.setCurrentItem(target_item)
+            self.tree.blockSignals(False)
+            self.tree.scrollToItem(target_item, QAbstractItemView.ScrollHint.PositionAtCenter)
+            target_item.setSelected(True)
+
     def reload_data(self):
         self._apply_theme()
+        expanded_projects, target_conv_id = self._capture_tree_state()
+
         if self._active_source == "codex":
             self._load_codex_source()
+            self._restore_tree_state(expanded_projects, target_conv_id)
             return
 
         # Le bouton 🔄 (et les actions de gestion Antigravity : suppression,
@@ -1825,6 +1987,7 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
             self.claude_project_map = build_claude_project_map()
             self._refresh_project_filter_combo()
             self._populate_tree()
+            self._restore_tree_state(expanded_projects, target_conv_id)
             n_conv = sum(len(v) for v in self.claude_project_map.values())
             self.status_bar.showMessage(
                 f"✳️ Claude Code / Desktop : {len(self.claude_project_map)} projet(s), {n_conv} conversation(s)",
@@ -1845,13 +2008,15 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
             found = False
             for c in self.all_convs:
                 if c.conv_id == self.selected_conv.conv_id:
-                    self.display_chat(c)
+                    self.display_chat(c, record_history=False)
                     found = True
                     break
             if not found:
                 self._clear_chat()
         else:
             self._clear_chat()
+
+        self._restore_tree_state(expanded_projects, target_conv_id)
 
         total_p = len(self.project_convs)
         total_c = len(self.all_convs)
@@ -3864,9 +4029,24 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
 
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
-    def _move_conv_action(self, c_info: ConversationInfo, target_project: str):
+    def _move_conv_action(self, c_info: ConversationInfo, target_project: str, confirm: bool = False):
+        if confirm:
+            title_display = c_info.title or c_info.conv_id[:12]
+            ret = QMessageBox.question(
+                self,
+                "Déplacer la conversation",
+                f"Voulez-vous déplacer la conversation :\n\n"
+                f"« {title_display} »\n\n"
+                f"vers le projet « {target_project} » ?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+
         ok, msg = move_conversation(c_info.conv_id, target_project, restart_desktop=False)
         if ok:
+            self._target_expand_project = target_project
             self.reload_data()
             if is_antigravity_desktop_running():
                 box = QMessageBox(self)

@@ -254,6 +254,12 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.12": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Glisser-déposer (Drag & Drop) de conversations : possibilité de déplacer une discussion Antigravity directement en la glissant sur un dossier projet cible dans l'arborescence (avec boîte de confirmation de sécurité)",
+                "Préservation de l'état de l'arbre au rechargement (refresh) : mémorisation et réouverture automatique de tous les dossiers projets qui étaient dépliés avant l'actualisation, dépliage automatique du projet parent et repositionnement direct sur la conversation active (sélection et défilement centré)",
+            ],
+        },
         "v2.11": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Dialogue de confirmation post-déplacement assoupli : proposition de deux boutons « Fermer » et « Redémarrer Desktop » avec message d'information suggérant le redémarrage uniquement si Desktop ne s'est pas actualisé en direct",
