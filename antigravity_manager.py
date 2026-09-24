@@ -3874,12 +3874,12 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
                 box.setIcon(QMessageBox.Icon.Information)
                 box.setText(
                     f"{msg}\n\n"
-                    "🔄 Google Antigravity Desktop est actuellement ouvert.\n"
-                    "Il doit être redémarré pour afficher la conversation sous son nouveau projet.\n\n"
-                    "Vérifiez vos éventuelles tâches en cours sur Desktop, puis cliquez ci-dessous pour le relancer."
+                    "🔄 Google Antigravity Desktop est actuellement ouvert.\n\n"
+                    "💡 Si Desktop n'est pas à jour avec l'emplacement de la conversation, vous pouvez le redémarrer ci-dessous."
                 )
+                btn_close = box.addButton("Fermer", QMessageBox.ButtonRole.RejectRole)
                 btn_restart = box.addButton("Redémarrer Desktop", QMessageBox.ButtonRole.AcceptRole)
-                box.setDefaultButton(btn_restart)
+                box.setDefaultButton(btn_close)
                 box.exec()
                 if box.clickedButton() == btn_restart:
                     restart_antigravity_desktop_if_running()

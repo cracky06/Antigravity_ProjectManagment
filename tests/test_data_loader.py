@@ -626,3 +626,55 @@ def test_restart_antigravity_desktop_if_running(monkeypatch, tmp_path):
     assert len(started) == 1
     assert started[0] == str(fake_exe)
 
+
+def test_build_project_map_filters_unrelated_directories(tmp_path, monkeypatch):
+    """Vérifie que les répertoires sans marqueurs ni convs sont exclus du panneau Antigravity."""
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    (projects_dir / "RandomDevFolder").mkdir()
+    (projects_dir / "ValidAntigravityProject" / ".agent").mkdir(parents=True)
+
+    gemini_dir = tmp_path / ".gemini"
+    antigravity_dir = gemini_dir / "antigravity"
+    antigravity_dir.mkdir(parents=True)
+    cfg_proj_dir = gemini_dir / "config" / "projects"
+    cfg_proj_dir.mkdir(parents=True)
+    (cfg_proj_dir / "proj1.json").write_text(json.dumps({"name": "OfficialProject"}), encoding="utf-8")
+
+    monkeypatch.setattr("data_loader.get_paths", lambda: (projects_dir, antigravity_dir, antigravity_dir / "brain", antigravity_dir / "conversations", antigravity_dir / "agyhub_summaries_proto.pb"))
+    monkeypatch.setattr("data_loader._extract_proto_metadata", lambda: {})
+
+    from data_loader import build_project_map
+    project_convs, all_convs = build_project_map()
+
+    assert "ValidAntigravityProject" in project_convs
+    assert "OfficialProject" in project_convs
+    assert "RandomDevFolder" not in project_convs
+
+
+def test_delete_conversation_cleans_summaries_db(tmp_path, monkeypatch):
+    """Vérifie que delete_conversation purge aussi l'enregistrement dans conversation_summaries.db."""
+    gemini_dir = tmp_path / ".gemini"
+    ag_dir = gemini_dir / "antigravity"
+    ag_dir.mkdir(parents=True)
+    db_path = ag_dir / "conversation_summaries.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT)")
+    conn.execute("INSERT INTO conversation_summaries VALUES ('c1', 'Titre 1')")
+    conn.execute("INSERT INTO conversation_summaries VALUES ('c2', 'Titre 2')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("data_loader.get_paths", lambda: (tmp_path, ag_dir, ag_dir / "brain", ag_dir / "conversations", ag_dir / "proto.pb"))
+    monkeypatch.setattr("data_loader._find_all_summaries_db", lambda: [db_path])
+
+    from data_loader import delete_conversation
+    ok, _ = delete_conversation("c1")
+    assert ok is True
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute("SELECT conversation_id FROM conversation_summaries").fetchall()
+    conn.close()
+    assert rows == [("c2",)]
+
+

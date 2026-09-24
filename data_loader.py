@@ -1191,12 +1191,30 @@ def build_project_map():
     projects_root, antigravity_root, brain_dir, conversations_dir, _ = get_paths()
     proto_meta = _extract_proto_metadata()
 
-    # Lister les dossiers existants dans le répertoire des projets
+    # Lister les projets reconnus (projets officiels Antigravity ou dossiers avec marqueurs Antigravity)
     projects = set()
+    cfg_projects_dir = antigravity_root.parent / "config" / "projects"
+    if cfg_projects_dir.is_dir():
+        for f in cfg_projects_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                n = d.get("name", "").strip()
+                if n and n.lower() != "outside of project":
+                    projects.add(n)
+            except Exception:
+                pass
+
     if projects_root.is_dir():
         for p in projects_root.iterdir():
             if p.is_dir():
-                projects.add(p.name)
+                # Un dossier sur disque est retenu s'il contient des marqueurs spécifiques Antigravity
+                if (
+                    (p / ".agent").is_dir()
+                    or (p / ".gemini").is_dir()
+                    or (p / ".antigravityrules").is_file()
+                    or (p / "agy.json").is_file()
+                ):
+                    projects.add(p.name)
 
     # Récupérer toutes les conversations réelles (dans le dossier configuré et les dossiers frères)
     actual_convs = set()
@@ -1338,6 +1356,16 @@ def delete_conversation(conv_id: str) -> tuple[bool, str]:
                         f.unlink()
                     except Exception as e:
                         errors.append(f"DB {sub}{ext}: {e}")
+
+    # Suppression dans conversation_summaries.db (index Desktop et IDE)
+    for db_path in _find_all_summaries_db():
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?", (conv_id,))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            errors.append(f"Summaries DB {db_path.name}: {e}")
 
     # Invalider le cache mémoire
     if conv_id in _CHAT_CACHE:
