@@ -176,5 +176,11 @@ def test_tree_state_capture_and_restore(qapp):
             it += 1
         assert is_re_expanded is True
 
+    # Test de priorisation de _target_select_conv_id
+    win._target_select_conv_id = "forced-conv-id-999"
+    _, captured_id = win._capture_tree_state()
+    assert captured_id == "forced-conv-id-999"
+    assert win._target_select_conv_id is None
+
     win.close()
 

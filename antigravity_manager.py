@@ -592,10 +592,14 @@ class _ChatTreeWidget(QTreeWidget):
         target_item = self.itemAt(event.position().toPoint())
         target_project = self._resolve_target_project(target_item)
         if target_project and target_project != c_info.project:
-            event.acceptProposedAction()
+            event.accept()
+            event.setDropAction(Qt.DropAction.CopyAction)
             win = self.window()
             if hasattr(win, "_move_conv_action"):
-                win._move_conv_action(c_info, target_project, confirm=True)
+                QTimer.singleShot(
+                    0,
+                    lambda c=c_info, tp=target_project: win._move_conv_action(c, tp, confirm=True),
+                )
         else:
             event.ignore()
 
@@ -1926,13 +1930,15 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
             expanded_projects.add(self._target_expand_project)
             self._target_expand_project = None
 
-        selected_id = None
-        if self._active_source == "codex" and getattr(self, "selected_codex_conv", None):
-            selected_id = getattr(self.selected_codex_conv, "conv_id", None)
-        elif self._active_source == "claude_code" and getattr(self, "selected_claude_conv", None):
-            selected_id = getattr(self.selected_claude_conv, "conv_id", None)
-        elif getattr(self, "selected_conv", None):
-            selected_id = getattr(self.selected_conv, "conv_id", None)
+        selected_id = getattr(self, "_target_select_conv_id", None)
+        self._target_select_conv_id = None
+        if not selected_id:
+            if self._active_source == "codex" and getattr(self, "selected_codex_conv", None):
+                selected_id = getattr(self.selected_codex_conv, "conv_id", None)
+            elif self._active_source == "claude_code" and getattr(self, "selected_claude_conv", None):
+                selected_id = getattr(self.selected_claude_conv, "conv_id", None)
+            elif getattr(self, "selected_conv", None):
+                selected_id = getattr(self.selected_conv, "conv_id", None)
 
         return expanded_projects, selected_id
 
@@ -2003,16 +2009,16 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         self._refresh_project_filter_combo(restore_saved=True)
         self._populate_tree()
 
-        if self.selected_conv:
-            # Tenter de restaurer la sélection
-            found = False
+        target_conv = None
+        active_id = target_conv_id or (self.selected_conv.conv_id if self.selected_conv else None)
+        if active_id:
             for c in self.all_convs:
-                if c.conv_id == self.selected_conv.conv_id:
-                    self.display_chat(c, record_history=False)
-                    found = True
+                if c.conv_id == active_id:
+                    target_conv = c
                     break
-            if not found:
-                self._clear_chat()
+
+        if target_conv:
+            self.display_chat(target_conv, record_history=False)
         else:
             self._clear_chat()
 
@@ -4047,6 +4053,7 @@ class AntigravityManagerWindow(CodexSourceMixin, QMainWindow):
         ok, msg = move_conversation(c_info.conv_id, target_project, restart_desktop=False)
         if ok:
             self._target_expand_project = target_project
+            self._target_select_conv_id = c_info.conv_id
             self.reload_data()
             if is_antigravity_desktop_running():
                 box = QMessageBox(self)

@@ -210,6 +210,7 @@
   2. **Préservation de l'état de l'arbre au rechargement (refresh)** : Avant toute actualisation, `_capture_tree_state()` mémorise les projets dépliés et l'ID de la conversation sélectionnée. Après reconstruction, `_restore_tree_state()` ré-ouvre tous les dossiers qui étaient ouverts, déplie automatiquement le projet parent de la discussion courante, la re-sélectionne et centre le défilement dessus (`scrollToItem`).
 - **Modifications apportées (`antigravity_manager.py`, `tests/test_ui_sanity.py`, `config.py`, `VERSION`, `FONCTIONNALITES.md`)** :
   - `antigravity_manager.py` : classe `_ChatTreeWidget` avec gestion de `startDrag`, `dragEnterEvent`, `dragMoveEvent`, `dropEvent` ; méthodes `_capture_tree_state` et `_restore_tree_state` ; intégration dans `reload_data()` et paramètre `confirm` dans `_move_conv_action()`.
-  - `tests/test_ui_sanity.py` : tests unitaires pour la détection du projet cible lors du drop et la persistance de l'état déplié/sélectionné.
+  - Fix post-drop : utilisation de `setDropAction(Qt.DropAction.CopyAction)` et différé via `QTimer.singleShot(0, ...)` dans `dropEvent` pour éviter que le contrôleur interne Qt ne détruise la conversation nouvellement recréée lors du refresh, et priorité de réaffichage sur `_target_select_conv_id`.
+  - `tests/test_ui_sanity.py` : tests unitaires pour la détection du projet cible lors du drop, la persistance de l'état déplié/sélectionné et la priorisation de `_target_select_conv_id`.
   - `VERSION` incrémentée à 2.12 et changelog mis à jour.
 - **Validation** : 271 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé.
