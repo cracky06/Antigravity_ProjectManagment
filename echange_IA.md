@@ -189,3 +189,16 @@
   - Boîte de dialogue modale post-déplacement avec bouton unique « Redémarrer Desktop ».
   - `VERSION` incrémentée à 2.10 et changelog mis à jour.
 - **Validation** : 267 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé (25.74 Mo).
+
+## 2026-09-24 - [v2.11] Filtrage intelligent des projets Antigravity, UX dialogue assoupli et purge summaries
+
+- **Problèmes résolus & Améliorations** :
+  1. **Filtrage des faux projets dans l'arborescence** : Dans `build_project_map()`, tous les dossiers situés sous le dossier racine `projects_root` (ex: `E:\Dev`) étaient répertoriés comme projets, y compris des répertoires génériques (`die`, `dist.2.2.0`, `capture zone`, `_ANTIGRAVITY_HORS_PROJET`, etc.) polluant le panneau latéral. Désormais, seuls les projets reconnus officiellement (`.gemini/config/projects/*.json`), les dossiers contenant des marqueurs Antigravity (`.agent`, `.gemini`, `.antigravityrules`, `agy.json`) ou ceux possédant des conversations actives sont affichés.
+  2. **Assouplissement de la modale post-déplacement** : Desktop actualisant son interface en direct via son file-watcher dans la plupart des cas, la boîte de dialogue propose désormais deux boutons « Fermer » (par défaut) et « Redémarrer Desktop », avec une note explicative suggérant de redémarrer si Desktop ne s'est pas actualisé.
+  3. **Purge synchronisée lors de la suppression de conversation** : `delete_conversation` supprime désormais la ligne correspondante dans `conversation_summaries.db`, garantissant la disparition immédiate côté Antigravity Desktop et IDE.
+- **Modifications apportées (`data_loader.py`, `antigravity_manager.py`, `tests/test_data_loader.py`, `config.py`, `VERSION`, `FONCTIONNALITES.md`)** :
+  - `data_loader.py` : filtrage dans `build_project_map()` et requête `DELETE FROM conversation_summaries` dans `delete_conversation()`.
+  - `antigravity_manager.py` : ajout du bouton `Fermer` et ajustement du texte dans `_move_conv_action`.
+  - `tests/test_data_loader.py` : nouveaux tests unitaires pour valider le filtrage et la purge summaries.
+  - `VERSION` incrémentée à 2.11 et changelog mis à jour.
+- **Validation** : 269 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé (25.77 Mo).

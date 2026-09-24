@@ -254,6 +254,13 @@ def set_last_seen_version(version: str) -> None:
 def get_changelog_data() -> dict[str, dict[str, list[str]]]:
     """Retourne l'historique structuré des versions."""
     return {
+        "v2.11": {
+            "✨ Nouvelles fonctionnalités (feat)": [
+                "Dialogue de confirmation post-déplacement assoupli : proposition de deux boutons « Fermer » et « Redémarrer Desktop » avec message d'information suggérant le redémarrage uniquement si Desktop ne s'est pas actualisé en direct",
+                "Filtrage intelligent des projets Antigravity : masquage des répertoires de développement génériques ne correspondant pas à des projets Antigravity (seuls les projets officiels enregistrés ou contenant des marqueurs .agent/.gemini/.antigravityrules ou des conversations actives sont affichés)",
+                "Nettoyage complet lors de la suppression de discussion : purge synchronisée dans conversation_summaries.db garantissant la disparition immédiate côté Antigravity Desktop et IDE",
+            ],
+        },
         "v2.10": {
             "✨ Nouvelles fonctionnalités (feat)": [
                 "Intégration de l'icône officielle Codex (assets/codex.png) dans le sélecteur de sources et dans l'arbre des conversations Codex",
