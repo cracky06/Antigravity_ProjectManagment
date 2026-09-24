@@ -202,3 +202,14 @@
   - `tests/test_data_loader.py` : nouveaux tests unitaires pour valider le filtrage et la purge summaries.
   - `VERSION` incrémentée à 2.11 et changelog mis à jour.
 - **Validation** : 269 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé (25.77 Mo).
+
+## 2026-09-24 - [v2.12] Drag & Drop des conversations dans l'arbre et persistance de l'état au rechargement
+
+- **Problèmes résolus & Améliorations** :
+  1. **Glisser-déposer (Drag & Drop) de conversations** : Implémentation d'une sous-classe `_ChatTreeWidget(QTreeWidget)` permettant de glisser une discussion Antigravity directement sur un dossier projet cible (ou sur une conversation appartenant à ce projet). Seules les conversations Antigravity sont déplaçables ; les dossiers et sections sont protégés contre tout déplacement accidentel. Une boîte de dialogue de confirmation sécurise le lâcher avant d'invoquer `_move_conv_action`.
+  2. **Préservation de l'état de l'arbre au rechargement (refresh)** : Avant toute actualisation, `_capture_tree_state()` mémorise les projets dépliés et l'ID de la conversation sélectionnée. Après reconstruction, `_restore_tree_state()` ré-ouvre tous les dossiers qui étaient ouverts, déplie automatiquement le projet parent de la discussion courante, la re-sélectionne et centre le défilement dessus (`scrollToItem`).
+- **Modifications apportées (`antigravity_manager.py`, `tests/test_ui_sanity.py`, `config.py`, `VERSION`, `FONCTIONNALITES.md`)** :
+  - `antigravity_manager.py` : classe `_ChatTreeWidget` avec gestion de `startDrag`, `dragEnterEvent`, `dragMoveEvent`, `dropEvent` ; méthodes `_capture_tree_state` et `_restore_tree_state` ; intégration dans `reload_data()` et paramètre `confirm` dans `_move_conv_action()`.
+  - `tests/test_ui_sanity.py` : tests unitaires pour la détection du projet cible lors du drop et la persistance de l'état déplié/sélectionné.
+  - `VERSION` incrémentée à 2.12 et changelog mis à jour.
+- **Validation** : 271 passed, 1 skipped (pytest). Exécutable `dist/AntigravityManager.exe` recompilé.
